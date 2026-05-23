@@ -32,7 +32,6 @@ function loadStoredChannels() {
 function saveStoredChannels(arr) {
   try { localStorage.setItem(CUSTOM_CHANNELS_KEY, JSON.stringify(arr)); } catch{}
 }
-const EXT_SEGMENTS = ["High","Low","Medium"];
 const EQUATIONS    = { conference:"EXP",detailing:"EXP",e_mails:"EXP",rebates:"LIN",social_media:"EXP",webinar:"EXP" };
 const RC_DEFAULTS  = {
   conference:   {ShortTermA:42.95,Curvature:0.0413,mROI:2.65,AdstockMonths:3,DecayLambda:0.3},
@@ -94,7 +93,6 @@ function downloadCSV(fn, rows) {
   const a=document.createElement("a"); a.href=URL.createObjectURL(new Blob([toCSV(rows)],{type:"text/csv"})); a.download=fn; a.click();
 }
 function rnd(min,max){return Math.random()*(max-min)+min;}
-function seededRand(arr){return arr[Math.floor(Math.random()*arr.length)];}
 
 // ─── External Model Builders ──────────────────────────────────────────────────
 function buildExtSales(cfg){
@@ -132,7 +130,7 @@ function buildExtRC(cfg){
 
 // ─── Internal Model: Basic Model Builder ─────────────────────────────────────
 function buildBasicModel(cfg) {
-  const {nSegments,nHCP,nMonths,nChannels,nLags,nAdstock,noiseRatio,secondaryNoise,
+  const {nSegments,nHCP,nMonths,nChannels,nAdstock,noiseRatio,secondaryNoise,
          valueIntercept,valueAsymptote,valueLag,startMonth,
          distPoisson,distNormal,distFlat,trExp,trLog,trPower,trLinear,curvature} = cfg;
 
@@ -456,7 +454,6 @@ function ExternalDesigner({onBack}){
   // Channel builder state
   const [nChannels,setNChannels]             = useState(6);
   const [chMode,setChMode]                   = useState("library");  // "library" | "random" | "custom"
-  const [selectedLibChs,setSelectedLibChs]   = useState([...EXT_CHANNELS]);
   const [customChInput,setCustomChInput]     = useState("");
   const [savedChannels,setSavedChannels]     = useState(loadStoredChannels);
 
@@ -471,7 +468,6 @@ function ExternalDesigner({onBack}){
   const [tab,setTab]=useState("RC");
 
   const setN=(path,val)=>setCfg(c=>{const ks=path.split(".");const cl=JSON.parse(JSON.stringify(c));let o=cl;for(let i=0;i<ks.length-1;i++)o=o[ks[i]];o[ks[ks.length-1]]=isNaN(val)?val:Number(val);return cl;});
-  const toggle=(k,v)=>setCfg(c=>({...c,[k]:c[k].includes(v)?c[k].filter(x=>x!==v):[...c[k],v]}));
 
   // Derive available preset options filtered to nSegs
   const preset = SEGMENT_PRESETS[segType];
@@ -507,21 +503,6 @@ function ExternalDesigner({onBack}){
     return picked;
   }, []);
 
-  const handleNChannelsChange = useCallback((n) => {
-    const capped = Math.max(1, Math.min(50, n));
-    setNChannels(capped);
-    if(chMode === "random"){
-      applyChannels(randomPickChannels(capped));
-    } else if(chMode === "library"){
-      // trim or extend selection
-      const current = cfg.channels;
-      if(current.length > capped) applyChannels(current.slice(0, capped));
-      else if(current.length < capped){
-        const remaining = ALL_PHARMA_CHANNELS.filter(c => !current.includes(c));
-        applyChannels([...current, ...remaining.slice(0, capped - current.length)]);
-      }
-    }
-  }, [chMode, cfg.channels, applyChannels, randomPickChannels]);
 
   const addCustomChannel = useCallback(() => {
     const v = customChInput.trim().replace(/\s+/g,"_");
@@ -647,6 +628,7 @@ function ExternalDesigner({onBack}){
       rc:    buildExtRC(cfg),
     });
     setTab("RC");
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   },[cfg, costMode]);
 
   const files=gen?{
@@ -655,11 +637,6 @@ function ExternalDesigner({onBack}){
     Spend: {label:"Spend_File.csv", rows:gen.spend, cols:["Segment_column","yearmonth","Channel","Promotional_units","Promotion_Unit_Cost","Spend","Period_Type"]},
   }:null;
 
-  const infoBox = (msg) => (
-    <div style={{background:`${accent}0D`,border:`1px solid ${accent}22`,borderRadius:"6px",padding:"8px 10px",fontSize:"10px",color:textSecondary,marginBottom:"10px",lineHeight:"1.5"}}>
-      {msg}
-    </div>
-  );
 
   return(
     <div style={S.app}>
