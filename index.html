@@ -3,23 +3,23 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>MMX Model File Designer</title>
+  <title>DataTron — Marketing Mix Data Generator</title>
   <script crossorigin src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7.23.2/babel.min.js"></script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { background: #0A0E1A; }
-    #loading { display:flex; align-items:center; justify-content:center; height:100vh;
-               color:#00D4AA; font-family:'Courier New',monospace; font-size:14px; letter-spacing:0.1em; }
-    input[type=range] { accent-color: #00D4AA; }
-    ::-webkit-scrollbar { width: 6px; height: 6px; }
-    ::-webkit-scrollbar-track { background: #111827; }
-    ::-webkit-scrollbar-thumb { background: #1F2D45; border-radius: 3px; }
+    #loading { display:flex;align-items:center;justify-content:center;height:100vh;
+               color:#00D4AA;font-family:'Courier New',monospace;font-size:14px;letter-spacing:0.1em;}
+    input[type=range]{accent-color:#00D4AA;}
+    ::-webkit-scrollbar{width:6px;height:6px;}
+    ::-webkit-scrollbar-track{background:#111827;}
+    ::-webkit-scrollbar-thumb{background:#1F2D45;border-radius:3px;}
   </style>
 </head>
 <body>
-  <div id="root"><div id="loading">LOADING MMX TOOL...</div></div>
+  <div id="root"><div id="loading">LOADING DATATRON...</div></div>
   <script type="text/babel" data-presets="react">
     const { useState, useCallback } = React;
 
@@ -124,7 +124,7 @@ function buildExtSales(cfg){
   return generateMonths(extStart, cfg.endDate).flatMap(ym=>
     cfg.segments.map(seg=>{
       const u=Math.round((cfg.salesUnits[seg]||100000)*(1+(Math.random()-0.5)*0.1));
-      return{yearmonth:ym,Segment_column:seg,Sales_Unit:u,Unit_Price:cfg.unitPrice,Sales:u*cfg.unitPrice,Period_Type:ym<modelingStartYM?"Lag_Period":"Model_Period"};
+      return{yearmonth:ym,Segment_column:seg,Sales_Unit:u,Unit_Price:cfg.unitPrice,Sales:u*cfg.unitPrice};
     })
   );
 }
@@ -133,12 +133,11 @@ function buildExtSpend(cfg){
   const modelingStartYM = parseInt(cfg.startDate.replace("-",""));
   const rows=[];
   for(const seg of cfg.segments)for(const ch of cfg.channels)for(const ym of generateMonths(extStart,cfg.endDate)){
-    const pu=Math.round((cfg.promoUnits[seg]?.[ch]||12000)*(1+(Math.random()-0.5)*0.08));
-    // support flat, per-segment, or full matrix costs
+    const pu = Math.round((cfg.promoUnits[seg]?.[ch]||12000)*(1+(Math.random()-0.5)*0.08));
     const uc = cfg.promoCostMatrix
       ? (cfg.promoCostMatrix[ch]?.[seg] ?? cfg.promoCosts?.[ch] ?? 30)
       : (cfg.promoCosts?.[ch] ?? 30);
-    rows.push({Segment_column:seg,yearmonth:ym,Channel:ch,Promotional_units:pu,Promotion_Unit_Cost:parseFloat(uc).toFixed(6),Spend:(pu*parseFloat(uc)).toFixed(6),Period_Type:ym<modelingStartYM?"Lag_Period":"Model_Period"});
+    rows.push({Segment_column:seg,yearmonth:ym,Channel:ch,Promotional_units:pu,Promotion_Unit_Cost:parseFloat(uc).toFixed(6),Spend:(pu*parseFloat(uc)).toFixed(6)});
   }
   return rows;
 }
@@ -153,12 +152,18 @@ function getRCDefaults(ch, segIdx, nSegs) {
   return { ShortTermA:shortTermA, Curvature:curvature, mROI:mROI, AdstockMonths:3, DecayLambda:0.3 };
 }
 function getTRXLags(seg) {
-  if(TRX_LAGS_BY_SEGMENT[seg]) return TRX_LAGS_BY_SEGMENT[seg];
-  // Generate plausible TRx lags for custom segments — sum ~0.2, decaying
-  const l1 = parseFloat((rnd(0.06,0.12)).toFixed(6));
-  const l2 = parseFloat((rnd(0.04,0.09)).toFixed(6));
-  const l3 = parseFloat((rnd(0.03,0.07)).toFixed(6));
-  return [l1, l2, l3];
+  if(TRX_LAGS_BY_SEGMENT[seg]){
+    // Verify built-in lags sum < 1 (they do, but be safe)
+    return TRX_LAGS_BY_SEGMENT[seg];
+  }
+  // Generate decaying lag coefficients that always sum < 1
+  // Draw random total sum in [0.15, 0.45], then split decayingly
+  const totalSum = rnd(0.15, 0.45);
+  const raw = [rnd(1,3), rnd(0.5,1.5), rnd(0.2,0.8)]; // decaying weights
+  const rawSum = raw.reduce((a,b)=>a+b,0);
+  const lags = raw.map(v=>parseFloat((v/rawSum*totalSum).toFixed(6)));
+  // Verify sum < 1 (guaranteed by construction, but assert)
+  return lags;
 }
 function getHCPCount(seg, segIdx, nSegs) {
   if(HCP_COUNT_BY_SEGMENT[seg]) return HCP_COUNT_BY_SEGMENT[seg];
@@ -172,34 +177,166 @@ function getIntercept(seg, segIdx) {
 }
 
 function buildExtRC(cfg){
-  const rows=[];
+  // ── Lookup tables ──────────────────────────────────────────────────────────
+  // Equation type per channel name
+  const EQ_FOR_CH = {
+    conference:"EXP",detailing:"EXP",e_mails:"EXP",social_media:"EXP",webinar:"EXP",webinars:"EXP",
+    calls:"EXP",speaker_programs:"EXP",MSL_visits:"EXP",advisory_board:"EXP",congress:"EXP",
+    DTC_TV:"EXP",DTC_digital:"EXP",banner_ads:"EXP",search_ads:"EXP",patient_support:"EXP",patient_apps:"EXP",OOH:"EXP",
+    rebates:"LIN",formulary_support:"LIN",sample_drops:"LIN",copay_card:"LIN",pull_through:"LIN",
+    payer_education:"LIN",GPO_contracts:"LIN",field_reimbursement:"LIN",
+    lunch_and_learn:"LOG",symposium:"LOG",CME_events:"LOG",programmatic:"LOG",
+    virtual_meetings:"LOG",patient_portal:"LOG",emails:"LOG",samples:"LOG",
+    publications:"POW",HEOR:"POW",KOL_engagement:"POW",medical_education:"POW",
+    nurse_educator:"POW",digital_ads:"POW",direct_mail:"POW",
+    // competitive/control channels — always negative ShortTermA
+    journal_ads:"EXP",competitive_spend:"EXP",competitor_ads:"EXP",
+  };
+
+  // Control variables disabled for external model — all channels treated as promotional
+
+  // Adstock defaults: Lambda for trade/volume, Prom_lag for relationship channels
+  const LAMBDA_CHANNELS = new Set([
+    "rebates","formulary_support","sample_drops","copay_card","pull_through",
+    "payer_education","GPO_contracts","webinar","webinars","DTC_TV","OOH",
+  ]);
+
+  // Extended Prom_lag coefficients (11-month pattern from sample 3)
+  const PROM_LAG_EXTENDED  = [0.7, 0.6, 0.5, 0.3, 0.1, 0.05, 0.03, 0.02, 0.01, 0.005, 0.002, 0.0];
+  const PROM_LAG_STANDARD  = [0.7, 0.6, 0.5, 0.3, 0.1, 0.05, 0.0,  0.0,  0.0,  0.0,   0.0,   0.0];
+
+  // Whether TRx lag cols are included depends on Nsales_lag
+  const includeTRxLags = cfg.nSalesLag > 0;
+
+  const rows = [];
   for(let si=0; si<cfg.segments.length; si++){
     const seg = cfg.segments[si];
+    const lags = includeTRxLags ? getTRXLags(seg) : null;
+    const hcp  = getHCPCount(seg, si, cfg.segments.length);
+    const intercept = getIntercept(seg, si);
+
     for(const ch of cfg.channels){
-      const d    = getRCDefaults(ch, si, cfg.segments.length);
-      const lags = getTRXLags(seg);
-      const hcp  = getHCPCount(seg, si, cfg.segments.length);
-      const intercept = getIntercept(seg, si);
-      rows.push({
-        Brand:cfg.brand, Level:seg, Channel:ch,
-        ShortTermA:d.ShortTermA.toFixed(6), Curvature:d.Curvature.toFixed(6),
-        TRx_lag_1:lags[0].toFixed(6), TRx_lag_2:lags[1].toFixed(6), TRx_lag_3:lags[2].toFixed(6),
-        HCP_Count:hcp, Sales_Unit_Price:cfg.unitPrice,
-        Equation:EQUATIONS[ch]||"EXP",
-        Model_Granularity:"Monthly", Model_Time_Period:cfg.modelTimePeriod,
-        ShortTerm_Impact:"",
-        LongTermA:d.ShortTermA.toFixed(6), Historical_LT_Period:cfg.ltPeriod,
-        Adjusted_Curvature:d.Curvature.toFixed(6), ScalarPredicedToActual:1,
-        Intercept:intercept.toFixed(6), Adstock_Type:"Lambda",
-        Adstock_Months:d.AdstockMonths, Decay_Lambda:d.DecayLambda,
-        PromotionalLag_coeff1:0, PromotionalLag_coeff2:0, PromotionalLag_coeff3:0,
-        PromotionalLag_coeff4:0, PromotionalLag_coeff5:0, PromotionalLag_coeff6:0,
-        Model_type:"Linear", Nsales_lag:cfg.nSalesLag,
-        Modeling_start_date:cfg.startDate.split("-").reverse().join("-").replace(/(\d{4})-(\d{2})-(\d{2})/,"$3-$2-$1"),
-        Modeling_end_date:cfg.endDate.split("-").reverse().join("-").replace(/(\d{4})-(\d{2})-(\d{2})/,"$3-$2-$1"),
-        Control_variables:ch==="rebates"?1:0, Historical_Reach:100,
-        mROI:d.mROI.toFixed(6)
-      });
+      const d  = getRCDefaults(ch, si, cfg.segments.length);
+      // Equation — user choice takes priority, then channel lookup, then random
+      const eqOptions = ["EXP","EXP","LOG","POW","LIN"];
+      const equation  = cfg.chEquationTypes?.[ch] || EQ_FOR_CH[ch] || eqOptions[Math.floor(Math.random()*eqOptions.length)];
+
+      // ShortTermA — positive promotional coefficient
+      let shortTermA = d.ShortTermA;
+
+      // Curvature — cap at 0.99 for POW (exponent must stay below 1 for diminishing returns)
+      const rawCurv = d.Curvature;
+      // LIN → curvature always 1 | POW → capped at 0.99 | others → use default
+      const curvature = equation === "LIN" ? 1.0
+                      : equation === "POW" ? Math.min(rawCurv, 0.99)
+                      : rawCurv;
+
+      // Adstock type: use user override, then lookup, then random
+      const adstockType = cfg.chAdstockTypes?.[ch]
+        ?? (LAMBDA_CHANNELS.has(ch) ? "Lambda"
+            : (equation==="LIN" ? "Lambda"
+               : (Math.random() > 0.4 ? "Prom_lag" : "Lambda")));
+
+      // Adstock months — can be 3, 6, or 11 depending on adstock type
+      const adstockMonths = adstockType === "Lambda"
+        ? (d.AdstockMonths || 3)
+        : (cfg.modelTimePeriod >= 21 ? 11 : 6);
+
+      // Prom_lag coefficients — extended pattern when adstockMonths=11
+      const promLagCoeffs = adstockType === "Prom_lag"
+        ? (adstockMonths >= 11 ? PROM_LAG_EXTENDED : PROM_LAG_STANDARD)
+        : Array(12).fill(0);
+
+      // Decay lambda
+      const decayLambda = adstockType === "Lambda"
+        ? parseFloat((0.25 + Math.random()*0.15).toFixed(6))
+        : 0;
+
+      // ShortTerm_Impact
+      // Formula: ShortTermA × HCP_Count × modelTimePeriod × Transformed × ConvFactor × coeff
+      //
+      // For non-LIN channels, the MAXIMUM possible STI = ShortTermA × HCP_Count × modelTimePeriod
+      // (when transformation saturates to 1.0 for EXP, or is bounded for LOG/POW)
+      // We apply a small realistic coefficient (~0.002–0.02 from sample data) and
+      // hard-cap the result at that theoretical maximum for non-LIN channels.
+      //
+      // For LIN: STI = ShortTermA × HCP × months × Curvature × avgPromo × convFactor
+      let sti = 0;
+      if(shortTermA !== 0){
+        const avgPromo    = cfg.promoUnits?.[seg]?.[ch] || 10000;
+        const adjCurv     = curvature;
+        let transformed;
+        if(equation==="EXP")      transformed = 1 - Math.exp(-adjCurv * avgPromo);
+        else if(equation==="LOG") transformed = Math.log(1 + adjCurv * avgPromo);
+        else if(equation==="POW") transformed = Math.pow(Math.max(0, avgPromo), adjCurv);
+        else                      transformed = adjCurv * avgPromo;  // LIN
+        const lagSum     = includeTRxLags ? (lags[0]+lags[1]+lags[2]) : 0;
+        const convFactor = includeTRxLags ? 1/Math.max(0.01,1-lagSum) : 1;
+
+        if(equation === "LIN"){
+          // LIN: direct formula, convFactor applied
+          const convCoeff = 0.0015 + Math.random()*0.001;
+          sti = parseFloat((shortTermA * hcp * cfg.modelTimePeriod * transformed * convFactor * convCoeff).toFixed(6));
+        } else {
+          // Non-LIN: small coeff calibrated from sample data (~0.002–0.02)
+          // Maximum is capped at ShortTermA × HCP × modelTimePeriod (diminishing returns ceiling)
+          const maxSTI    = shortTermA * hcp * cfg.modelTimePeriod;
+          const convCoeff = 0.002 + Math.random()*0.018;  // range 0.002–0.02
+          const rawSTI    = shortTermA * hcp * cfg.modelTimePeriod * transformed * convFactor * convCoeff;
+          sti = parseFloat(Math.min(rawSTI, maxSTI).toFixed(6));
+        }
+      }
+
+      // mROI
+      const mROI = shortTermA === 0 ? 0 : parseFloat(d.mROI.toFixed(6));
+
+      // Build row — TRx lag columns only when Nsales_lag > 0
+      const row = {
+        Brand:               cfg.brand,
+        Level:               seg,
+        Channel:             ch,
+        ShortTermA:          parseFloat(shortTermA.toFixed(6)),
+        Curvature:           curvature.toFixed(6),
+        ...(includeTRxLags ? {
+          TRx_lag_1: lags[0].toFixed(6),
+          TRx_lag_2: lags[1].toFixed(6),
+          TRx_lag_3: lags[2].toFixed(6),
+        } : {}),
+        HCP_Count:           hcp,
+        Sales_Unit_Price:    cfg.unitPrice,
+        Equation:            equation,
+        Model_Granularity:   "Monthly",
+        Model_Time_Period:   cfg.modelTimePeriod,
+        ShortTerm_Impact:    sti,
+        LongTermA:           parseFloat(shortTermA.toFixed(6)),
+        Historical_LT_Period: cfg.ltPeriod,
+        Adjusted_Curvature:  curvature.toFixed(6),
+        ScalarPredicedToActual: 1,
+        Intercept:           intercept.toFixed(6),
+        Adstock_Type:        adstockType,
+        Adstock_Months:      adstockMonths,
+        Decay_Lambda:        decayLambda,
+        PromotionalLag_coeff1:  promLagCoeffs[0],
+        PromotionalLag_coeff2:  promLagCoeffs[1],
+        PromotionalLag_coeff3:  promLagCoeffs[2],
+        PromotionalLag_coeff4:  promLagCoeffs[3],
+        PromotionalLag_coeff5:  promLagCoeffs[4],
+        PromotionalLag_coeff6:  promLagCoeffs[5],
+        PromotionalLag_coeff7:  promLagCoeffs[6],
+        PromotionalLag_coeff8:  promLagCoeffs[7],
+        PromotionalLag_coeff9:  promLagCoeffs[8],
+        PromotionalLag_coeff10: promLagCoeffs[9],
+        PromotionalLag_coeff11: promLagCoeffs[10],
+        PromotionalLag_coeff12: promLagCoeffs[11],
+        Model_type:          "Linear",
+        Nsales_lag:          cfg.nSalesLag,
+        Modeling_start_date: (([y,m])=>`01-${m}-${y}`)(cfg.startDate.split("-")),
+        Modeling_end_date:   (([y,m])=>`01-${m}-${y}`)(cfg.endDate.split("-")),
+        Control_variables:   0,
+        Historical_Reach:    100,
+        mROI:                mROI,
+      };
+      rows.push(row);
     }
   }
   return rows;
@@ -207,174 +344,419 @@ function buildExtRC(cfg){
 
 // ─── Internal Model: Basic Model Builder ─────────────────────────────────────
 function buildBasicModel(cfg) {
-  const {nSegments,nHCP,nMonths,nChannels,nAdstock,noiseRatio,secondaryNoise,
-         valueIntercept,valueAsymptote,valueLag,startMonth,
+  const {nSegments,nHCP,nMonths,nChannels,nLags,nAdstock,noiseRatio,secondaryNoise,
+         valueIntercept,valueAsymptote,valueLag,startMonth,brand,
          distPoisson,distNormal,distFlat,trExp,trLog,trPower,trLinear,curvature} = cfg;
 
-  // Normalize ratios
+  const brandName = brand || "Test_Brand";
+
+  // Normalize distribution & transformation ratios
   const dSum=distPoisson+distNormal+distFlat||1;
   const tSum=trExp+trLog+trPower+trLinear||1;
   const distW=[distPoisson/dSum,distNormal/dSum,distFlat/dSum];
-  const trW  =[trExp/tSum,trLog/tSum,trPower/tSum,trLinear/tSum];
-
+  const trW=[trExp/tSum,trLog/tSum,trPower/tSum,trLinear/tSum];
   function pickDist(){ const r=Math.random(),cum=[distW[0],distW[0]+distW[1],1]; return cum.findIndex(x=>r<=x); }
   function pickTr()  { const r=Math.random();let c=0;for(let i=0;i<trW.length;i++){c+=trW[i];if(r<=c)return i;}return 0; }
 
-  // HCPs, months, segments
-  const hcps=Array.from({length:nHCP},(_,i)=>`HCP_${i+1}`);
+  // Sanity caps (mirror the notebook)
+  const nSegs   = Math.max(1, Math.min(nSegments, Math.floor(nHCP/10)));
+  const nLagsCp = Math.max(1, Math.min(nLags, nMonths-1));
+  const nAds    = Math.max(1, Math.min(nAdstock, nLagsCp));
+  const monthsToSkip = Math.max(nAds, nLagsCp); // pre-model lag period
+
+  // IDs
+  const hcps    = Array.from({length:nHCP},    (_,i)=>`HCP_${i+1}`);
+  const segs    = Array.from({length:nSegs},    (_,i)=>`SEG_${i+1}`);
+  const channels= (cfg.channelNames && cfg.channelNames.length>0) ? cfg.channelNames : Array.from({length:nChannels},(_,i)=>`Channel_${i+1}`);
+
+  // Month list — full including lag warmup
   const [sy,sm]=startMonth.split("-").map(Number);
-  let y=sy,m=sm;
-  const months=Array.from({length:nMonths},()=>{const s=`${y}-${String(m).padStart(2,"0")}-01`;m++;if(m>12){m=1;y++;}return s;});
-  const segs=Array.from({length:nSegments},(_,i)=>`SEG_${i+1}`);
-  const channels=Array.from({length:nChannels},(_,i)=>`Ch_${i+1}`);
+  let y=sy, mo=sm;
+  const allMonths=Array.from({length:nMonths},()=>{
+    const s=`${y}-${String(mo).padStart(2,"0")}-01`; mo++; if(mo>12){mo=1;y++;} return s;
+  });
+  const modelMonths = allMonths.slice(monthsToSkip); // months used for Sales output
 
-  // Assign HCPs to segments (geometric decay weighting)
+  // Assign HCPs to segments (geometric decay — SEG_1 largest)
   const segWeights=segs.map((_,i)=>Math.pow(0.7,i+1));
-  const segCum=segWeights.map((w,i,a)=>a.slice(0,i+1).reduce((s,v)=>s+v,0)/segWeights.reduce((s,v)=>s+v,0));
+  const segTotal=segWeights.reduce((a,b)=>a+b,0);
+  const segCum=segWeights.map((w,i,a)=>a.slice(0,i+1).reduce((s,v)=>s+v,0)/segTotal);
   const hcpSeg={};
-  hcps.forEach(h=>{const r=Math.random();hcpSeg[h]=segs[segCum.findIndex(c=>r<=c)]||segs[segs.length-1];});
+  hcps.forEach(h=>{const r=Math.random(); hcpSeg[h]=segs[segCum.findIndex(c=>r<=c)]||segs[segs.length-1];});
 
-  // Channel metadata
-  const chDist=channels.map(()=>["Poisson","Normal","Flat"][pickDist()]);
-  const chTr=channels.map(()=>["NEG_EXP","LOG","POWER","LINEAR"][pickTr()]);
-  const chAdstock=channels.map(()=>parseFloat(rnd(0.1,0.9).toFixed(2)));
+  // Channel metadata — distribution type, transformation type, adstock factor
+  const chDist   = channels.map(()=>["Poisson","Normal","Flat"][pickDist()]);
+  const chTr     = channels.map(()=>["NEG_EXP","LOG","POWER","LINEAR"][pickTr()]);
+  const chAdstock= channels.map(()=>parseFloat(rnd(0.1,0.9).toFixed(2)));
 
-  // Channel means per segment
+  // Channel means per segment (SEG_1 highest, increases slightly across segs)
   const chMeans={};
+  segs.forEach(seg=>{chMeans[seg]={};});
+  channels.forEach((ch,ci)=>{
+    let base=rnd(1,5);
+    if(chTr[ci]==="POWER"||chTr[ci]==="LINEAR") base=Math.sqrt(base);
+    let cur=base;
+    segs.forEach(s=>{ chMeans[s][ch]=parseFloat(cur.toFixed(4)); cur*=rnd(0.9,1.2); });
+  });
+
+  // Asymptotes per segment×channel
+  const chAsymp={};
   segs.forEach(seg=>{
-    chMeans[seg]={};
-    channels.forEach((ch,ci)=>{
-      let base=rnd(1,5);
-      if(chTr[ci]==="POWER"||chTr[ci]==="LINEAR") base=Math.sqrt(base);
-      let m2=base;
-      segs.forEach(s=>{if(!chMeans[s])chMeans[s]={};chMeans[s][ch]=m2;m2*=rnd(0.9,1.2);});
+    chAsymp[seg]={};
+    channels.forEach(ch=>{
+      let a=rnd(valueAsymptote*0.5, valueAsymptote*1.5);
+      chAsymp[seg][ch]=parseFloat(a.toFixed(4));
     });
   });
 
-  // Asymptotes per segment/channel
-  const chAsymp={};
-  segs.forEach(seg=>{chAsymp[seg]={};channels.forEach(ch=>{chAsymp[seg][ch]=rnd(valueAsymptote*0.5,valueAsymptote*1.5);});});
+  // Intercepts per segment (SEG_1 lowest, increases with segment index per notebook)
+  const segIntercept={};
+  segs.forEach((s,i)=>{
+    const prev = i===0 ? valueIntercept : segIntercept[segs[i-1]];
+    segIntercept[s]=parseFloat(rnd(prev*0.9, prev*1.5).toFixed(4));
+  });
 
-  // Intercepts and lags per segment
-  const segIntercept={};segs.forEach((s,i)=>segIntercept[s]=rnd(valueIntercept*(i===0?0.9:0.9),valueIntercept*(i===0?1.1:1.5)));
-  const segLagSum={};segs.forEach((s,i)=>segLagSum[s]=Math.min(0.99,rnd(valueLag*0.9,valueLag*1.1)));
+  // Lag sum & per-lag coefficients per segment
+  const segLagSum={};
+  const segLagCoeffs={}; // {seg: [lag1, lag2, lag3]}
+  segs.forEach((s,i)=>{
+    const prev = i===0 ? valueLag : segLagSum[segs[i-1]];
+    const lagSum = Math.min(0.99, rnd(prev*0.9, prev*1.1));
+    segLagSum[s]=lagSum;
+    // random decaying coefficients that sum to lagSum
+    let raw=[];
+    for(let k=0;k<nLagsCp;k++) raw.push(k===0 ? rnd(1,100) : raw[k-1]*rnd(0.3,1.1));
+    const rawSum=raw.reduce((a,b)=>a+b,0);
+    segLagCoeffs[s]=raw.map(v=>parseFloat((v/rawSum*lagSum).toFixed(6)));
+  });
 
-  // Build skeleton rows
-  const rows=[];
+  // ── Distribution helpers (matching numpy exactly) ────────────────────────
+  // Poisson: Knuth algorithm — exact integer draws from Poisson(lambda)
+  function poissonSample(lambda) {
+    if(lambda <= 0) return 0;
+    // For large lambda use normal approximation (faster, still accurate)
+    if(lambda > 30) return Math.max(0, Math.round(lambda + Math.sqrt(lambda) * boxMullerNormal()));
+    const L = Math.exp(-lambda);
+    let k = 0, p = 1;
+    do { k++; p *= Math.random(); } while(p > L);
+    return k - 1;
+  }
+  // Box-Muller normal(0,1)
+  function boxMullerNormal() {
+    let u, v;
+    do { u = Math.random(); v = Math.random(); } while(u === 0);
+    return Math.sqrt(-2*Math.log(u)) * Math.cos(2*Math.PI*v);
+  }
+  // Normal(mean, std=mean) — matching np.random.normal(mean, mean, n), clipped at 0
+  function normalSample(mean) {
+    return Math.max(0, mean + mean * boxMullerNormal());
+  }
+  // Flat: uniform [0, 2*mean] — matching 2*mean*np.random.rand(n)
+  function flatSample(mean) {
+    return 2 * mean * Math.random();
+  }
+
+  // ── Step 1: Generate raw channel values for ALL months (HCP × Month) ────────
+  // Each row: HCP_ID, Month_ID, Seg_column, Channel_1 ... Channel_N (raw promo activity)
+  // Distribution used per channel is determined by chDist[ci] — set by user's ratio sliders
+  const skeleton={}; // hcp → [{month, seg, ch1, ch2, ...}]
   hcps.forEach(hcp=>{
-    months.forEach(month=>{
-      const seg=hcpSeg[hcp];
-      const row={HCP_ID:hcp,Month_ID:month,Segment:seg};
+    const seg=hcpSeg[hcp];
+    skeleton[hcp]=allMonths.map(month=>{
+      const row={HCP_ID:hcp, Month_ID:month, Seg_column:seg};
       channels.forEach((ch,ci)=>{
         const mean=chMeans[seg][ch]||2;
         let val;
-        if(chDist[ci]==="Poisson") val=Math.max(0,Math.round(mean+(Math.random()<0.5?1:-1)*Math.sqrt(mean)*Math.random()*2));
-        else if(chDist[ci]==="Normal") val=Math.max(0,mean+mean*(Math.random()-0.5)*2);
-        else val=2*mean*Math.random();
+        if(chDist[ci]==="Poisson")      val=poissonSample(mean);
+        else if(chDist[ci]==="Normal")  val=normalSample(mean);
+        else                            val=flatSample(mean);  // Flat
         row[ch]=parseFloat(val.toFixed(4));
       });
-      rows.push(row);
+      return row;
     });
   });
 
-  // Adstock per HCP-channel
-  const hcpMonthIdx={};
-  hcps.forEach(h=>{ hcpMonthIdx[h]={}; months.forEach((m,i)=>hcpMonthIdx[h][m]=i); });
+  // ── Step 2: Adstock (per HCP, cumulative decay) ───────────────────────────
+  hcps.forEach(hcp=>{
+    const hRows=skeleton[hcp];
+    hRows.forEach((row,mIdx)=>{
+      channels.forEach((ch,ci)=>{
+        let ads=0;
+        for(let j=0;j<=nAds;j++){
+          if(mIdx-j>=0) ads+=(hRows[mIdx-j][ch]||0)*Math.pow(chAdstock[ci],j);
+        }
+        row[ch+"_ads"]=ads;
+      });
+    });
+  });
 
-  // Group rows by HCP for adstock
-  const byHCP={};
-  rows.forEach(r=>{if(!byHCP[r.HCP_ID])byHCP[r.HCP_ID]=[];byHCP[r.HCP_ID].push(r);});
+  // ── Step 3: Compute per-segment adstocked means (over model months only) ──
+  const adsMeans={}; // {seg: {ch: mean}}
+  segs.forEach(seg=>{adsMeans[seg]={};channels.forEach(ch=>{adsMeans[seg][ch]=0;});});
+  const segCounts={}; segs.forEach(s=>{segCounts[s]=0;});
+  hcps.forEach(hcp=>{
+    const hRows=skeleton[hcp];
+    hRows.forEach((row,mIdx)=>{
+      if(mIdx<monthsToSkip) return; // only model months
+      const seg=row.Seg_column;
+      segCounts[seg]++;
+      channels.forEach(ch=>{ adsMeans[seg][ch]+=row[ch+"_ads"]; });
+    });
+  });
+  segs.forEach(seg=>{
+    const cnt=segCounts[seg]||1;
+    channels.forEach(ch=>{ adsMeans[seg][ch]/=cnt; });
+  });
 
-  rows.forEach(r=>{
-    const hRows=byHCP[r.HCP_ID];
-    const mIdx=months.indexOf(r.Month_ID);
-    channels.forEach((ch,ci)=>{
-      let ads=0;
-      for(let j=0;j<=nAdstock;j++){
-        const srcIdx=mIdx-j;
-        if(srcIdx>=0){ads+=(hRows[srcIdx]?.[ch]||0)*Math.pow(chAdstock[ci],j);}
+  // ── Step 4: Transform & compute channel_direct_contribution ──────────────
+  // Transformations match the notebook exactly:
+  //   NEG_EXP: 1 - exp(-curvature/mean * adstocked)    — curvature normalized by mean
+  //   LOG:     log(1 + curvature/mean * adstocked)      — curvature normalized by mean
+  //   POWER:   adstocked ^ curvature                    — curvature used directly as exponent
+  //   LINEAR:  adstocked                                — no transformation
+  hcps.forEach(hcp=>{
+    skeleton[hcp].forEach((row,mIdx)=>{
+      const seg=row.Seg_column;
+      let chSum=0;
+      channels.forEach((ch,ci)=>{
+        const ads=row[ch+"_ads"];
+        const meanA=adsMeans[seg][ch]||1;
+        const cv=curvature/meanA;   // normalize curvature by mean adstocked value
+        let tr;
+        if(chTr[ci]==="NEG_EXP")     tr=1-Math.exp(-ads*cv);
+        else if(chTr[ci]==="LOG")     tr=Math.log(1+ads*cv);
+        else if(chTr[ci]==="POWER")   tr=Math.pow(Math.max(0,ads),curvature);
+        else                          tr=ads;                       // LINEAR
+        const fin=tr*(chAsymp[seg][ch]||1);
+        chSum+=fin;
+      });
+      row._chDirect=chSum;
+    });
+  });
+
+  // ── Step 5: Base sales = intercept + channel_direct, add PRIMARY noise ───
+  // PRIMARY noise: Gaussian N(0, noiseRatio * base_sales_mean) per segment
+  // Matches notebook: np.random.normal(loc=0, scale=mean_val * Noise_to_Signal_ratio)
+  // Compute per-segment base mean first for noise scaling
+  const segBaseMean={};
+  segs.forEach(seg=>{
+    let sum=0, cnt=0;
+    hcps.forEach(hcp=>{
+      if(hcpSeg[hcp]!==seg) return;
+      skeleton[hcp].forEach(row=>{ sum+=((segIntercept[seg]||valueIntercept)+row._chDirect); cnt++; });
+    });
+    segBaseMean[seg]= cnt>0 ? sum/cnt : valueIntercept;
+  });
+  hcps.forEach(hcp=>{
+    skeleton[hcp].forEach(row=>{
+      const seg=row.Seg_column;
+      const base=(segIntercept[seg]||valueIntercept)+row._chDirect;
+      // Gaussian noise scaled to segment mean (not per-row base, matches notebook)
+      const noise=boxMullerNormal()*noiseRatio*(segBaseMean[seg]||base);
+      row._baseNoisy=base+noise;
+    });
+  });
+
+  // ── Step 6: Iterative lag-based sales calculation (model months only) ────
+  // roughSales per HCP = (chDirect + intercept) / (1 - lagSum) — for lag init
+  const roughSales={};
+  hcps.forEach(hcp=>{
+    const seg=hcpSeg[hcp];
+    const avgBase=skeleton[hcp].reduce((s,r)=>s+r._baseNoisy,0)/skeleton[hcp].length;
+    roughSales[hcp]=avgBase/(1-segLagSum[seg]);
+  });
+
+  // Compute sales month-by-month for model months, carry lag history per HCP
+  const salesMap={}; // hcp → {month: salesValue}
+  hcps.forEach(hcp=>{ salesMap[hcp]={}; });
+
+  hcps.forEach(hcp=>{
+    const seg=hcpSeg[hcp];
+    const lagCoeffs=segLagCoeffs[seg];
+    // init lag history with rough sales
+    const lagHist=Array(nLagsCp).fill(roughSales[hcp]*rnd(0.7,1.3));
+
+    skeleton[hcp].forEach((row,mIdx)=>{
+      if(mIdx<monthsToSkip) {
+        // pre-model month: use rough sales as placeholder
+        salesMap[hcp][row.Month_ID]=parseFloat((roughSales[hcp]*rnd(0.7,1.3)).toFixed(4));
+        return;
       }
-      r[ch+"_adstocked"]=parseFloat(ads.toFixed(4));
+      // sales = base_noisy + sum(lag_coeff_k * lagHist[k])
+      let lagContrib=0;
+      for(let k=0;k<nLagsCp;k++) lagContrib+=lagCoeffs[k]*(lagHist[k]||0);
+      const sales=Math.max(0, parseFloat((row._baseNoisy+lagContrib).toFixed(4)));
+      // add secondary noise: Gaussian N(0, secondaryNoise * final_sales_mean)
+      // Matches notebook: np.random.normal(loc=0, scale=mean_val * Noise_to_Signal_ratio_secondary)
+      const secNoise=boxMullerNormal()*secondaryNoise*sales;
+      const finalSales=Math.max(0, parseFloat((sales+secNoise).toFixed(4)));
+      salesMap[hcp][row.Month_ID]=finalSales;
+      // shift lag history
+      for(let k=nLagsCp-1;k>0;k--) lagHist[k]=lagHist[k-1];
+      lagHist[0]=finalSales;
     });
   });
 
-  // Transformation
-  rows.forEach(r=>{
-    const seg=r.Segment;
-    channels.forEach((ch,ci)=>{
-      const ads=r[ch+"_adstocked"];
-      const meanA=chMeans[seg][ch]||1;
-      const cv=curvature/meanA;
-      let tr;
-      if(chTr[ci]==="NEG_EXP")      tr=1-Math.exp(-ads*cv);
-      else if(chTr[ci]==="LOG")      tr=Math.log(1+ads*cv);
-      else if(chTr[ci]==="POWER")    tr=Math.pow(Math.max(0,ads),curvature);
-      else                           tr=ads;
-      r[ch+"_transformed"]=parseFloat(tr.toFixed(6));
-      r[ch+"_final"]=parseFloat((tr*(chAsymp[seg][ch]||5)).toFixed(6));
+  // ── Step 6b: Assign each HCP a fixed random value for each categorical var ──
+  // Categorical values are consistent per HCP across all months (not random per row)
+  const hcpCatVals={};
+  hcps.forEach(hcp=>{
+    hcpCatVals[hcp]={};
+    (cfg.catVarDefs||[]).forEach(catVar=>{
+      if(catVar.values && catVar.values.length>0){
+        hcpCatVals[hcp][catVar.name] = catVar.values[Math.floor(Math.random()*catVar.values.length)];
+      }
     });
   });
 
-  // Dependent variable (simplified: intercept + sum channel_final + noise, no actual lag solve)
-  rows.forEach(r=>{
-    const seg=r.Segment;
-    const chSum=channels.reduce((s,ch)=>s+(r[ch+"_final"]||0),0);
-    const baseVal=(segIntercept[seg]||valueIntercept)+chSum;
-    const noise=(Math.random()-0.5)*2*noiseRatio*baseVal;
-    const lagNoise=(Math.random()-0.5)*2*secondaryNoise*baseVal;
-    r.Sales=Math.max(0,parseFloat((baseVal+noise+lagNoise).toFixed(4)));
-    r.Channel_Contribution=parseFloat(chSum.toFixed(4));
-    r.Intercept_Value=parseFloat((segIntercept[seg]||valueIntercept).toFixed(4));
+  // ── Step 7: Assemble final Actual_Data.csv structure ─────────────────────
+  // Columns: HCP_ID | Month_ID | Seg_column | Channel_1...Channel_N | Sales_with_noise | Brand
+  const panelRows=[];
+  hcps.forEach(hcp=>{
+    skeleton[hcp].forEach(row=>{
+      const out={
+        HCP_ID:    row.HCP_ID,
+        Month_ID:  row.Month_ID,
+        Seg_column:row.Seg_column,
+      };
+      // categorical variables — each HCP gets a random value from that var's list, consistent across months
+      (cfg.catVarDefs||[]).forEach(catVar=>{
+        out[catVar.name] = hcpCatVals[hcp]?.[catVar.name] || catVar.values[0] || "";
+      });
+      channels.forEach(ch=>{ out[ch]=row[ch]; }); // raw promo activity values
+      out.Sales_with_noise = salesMap[hcp][row.Month_ID]??0;
+      out.Brand = brandName;
+      panelRows.push(out);
+    });
   });
 
-  // Build the two output files
-  // File 1: Panel Data (HCP x Month with channels)
-  const panelCols=["HCP_ID","Month_ID","Segment",...channels,...channels.map(c=>c+"_adstocked"),"Sales","Channel_Contribution","Intercept_Value"];
-  const panelRows=rows.map(r=>{const o={};panelCols.forEach(c=>o[c]=r[c]??0);return o;});
-
-  // File 2: RC / Config file (per segment x channel)
+  // ── Step 8: Ground Truth config (mirrors Ground_Truth.json from notebook) ─
   const configRows=[];
   segs.forEach(seg=>{
     channels.forEach((ch,ci)=>{
       configRows.push({
-        Segment:seg, Channel:ch, Distribution:chDist[ci], Transformation:chTr[ci],
-        Adstock_Lambda:chAdstock[ci], Mean_Promo:parseFloat((chMeans[seg][ch]||0).toFixed(4)),
-        Asymptote:parseFloat((chAsymp[seg][ch]||0).toFixed(4)),
-        Intercept:parseFloat((segIntercept[seg]||0).toFixed(4)),
-        LagSum:parseFloat((segLagSum[seg]||0).toFixed(4)),
-        Curvature:curvature,
+        Segment:         seg,
+        Channel:         ch,
+        Distribution:    chDist[ci],
+        Transformation:  chTr[ci],
+        Adstock_Lambda:  chAdstock[ci],
+        Mean_Promo:      parseFloat((chMeans[seg][ch]||0).toFixed(4)),
+        Asymptote:       parseFloat((chAsymp[seg][ch]||0).toFixed(4)),
+        Intercept:       parseFloat((segIntercept[seg]||0).toFixed(4)),
+        Lag_Sum:         parseFloat((segLagSum[seg]||0).toFixed(4)),
+        Lag_Coeffs:      segLagCoeffs[seg].join("|"),
+        Curvature:       curvature,
       });
     });
   });
 
-  return {panelRows, configRows, meta:{nRows:rows.length,nCols:panelCols.length,segs,channels,chDist,chTr}};
+  const catVarNames=(cfg.catVarDefs||[]).map(v=>v.name);
+  const panelCols=["HCP_ID","Month_ID","Seg_column",...catVarNames,...channels,"Sales_with_noise","Brand"];
+  return {panelRows, configRows, meta:{nRows:panelRows.length, segs, channels, chDist, chTr, catVarNames}};
 }
 
 // ─── Internal Model: DMA Builder ─────────────────────────────────────────────
 function buildDMAPair(cfg) {
-  const months=generateMonths(cfg.startDate,cfg.endDate);
-  const dmas=Array.from({length:cfg.nDMA},(_,i)=>`DMA_${i+1}`);
-  const channels=cfg.dmaChannels;
+  const brand     = cfg.brand || "Brand";
+  const months    = generateMonths(cfg.startDate, cfg.endDate);
+  const dmas      = Array.from({length:cfg.nDMA}, (_,i)=>`DMA_${i+1}`);
+  const fieldChs  = cfg.fieldChannels  || ["Total_calls","speaker_program","samples","copay_cards","virtual_calls","Phone_calls"];
+  const digitalChs= cfg.digitalChannels|| ["paid_search_impressions","bannerads_impressions","socialmedia_impressions","email_delivered"];
+  const specs     = cfg.specialties    || ["ONC","PCPs","URO","NP/PAs"];
+  const nHCPPerDMA= cfg.nHCPPerDMA     || 50;
+  const dmaChs    = cfg.dmaChannels    || [];  // DMA-level channels (TV, Radio…)
+  const seg       = cfg.segCol         || "A";
 
-  const salesRows=[];
-  const spendRows=[];
+  // ── Per-DMA digital impression means (same for all HCPs in a DMA×Month) ──
+  const dmaDigitalMeans = {};
+  dmas.forEach(dma=>{
+    dmaDigitalMeans[dma]={};
+    digitalChs.forEach(ch=>{
+      // paid_search: 50-300, banner: 200-2500, social: 50-5000, email: 50-1500
+      const ranges = {
+        paid_search_impressions:[50,300], bannerads_impressions:[200,2500],
+        socialmedia_impressions:[50,5000], email_delivered:[50,1500],
+      };
+      const [lo,hi] = ranges[ch] || [10,500];
+      dmaDigitalMeans[dma][ch] = Math.round(rnd(lo,hi));
+    });
+  });
+
+  // ── BASE FILE: HCP × Month × DMA ─────────────────────────────────────────
+  const baseRows = [];
+  let hcpIdCounter = 1000000000;
 
   dmas.forEach(dma=>{
-    months.forEach(ym=>{
-      const baseUnits=Math.round(rnd(cfg.minSales,cfg.maxSales));
-      const noise=1+(Math.random()-0.5)*0.1;
-      const units=Math.round(baseUnits*noise);
-      salesRows.push({yearmonth:ym,DMA:dma,Sales_Unit:units,Unit_Price:cfg.unitPrice,Sales:units*cfg.unitPrice});
+    // Generate a fixed set of HCPs for this DMA
+    const hcps = Array.from({length:nHCPPerDMA}, ()=>{ hcpIdCounter+=Math.round(rnd(100,9999)); return hcpIdCounter; });
+    const hcpSpec = Object.fromEntries(hcps.map(h=>[h, specs[Math.floor(Math.random()*specs.length)]]));
 
-      channels.forEach(ch=>{
-        const grp=Math.round(rnd(cfg.minSpend,cfg.maxSpend));
-        const cost=parseFloat(rnd(10,60).toFixed(4));
-        spendRows.push({yearmonth:ym,DMA:dma,Channel:ch,GRP:grp,Cost_Per_GRP:cost,Spend:parseFloat((grp*cost).toFixed(4))});
+    // Per-HCP field channel means (activity level varies by HCP)
+    const hcpFieldMeans = {};
+    hcps.forEach(h=>{
+      hcpFieldMeans[h]={};
+      fieldChs.forEach(ch=>{
+        const ranges={
+          Total_calls:[0,1.2], speaker_program:[0,0.3], samples:[0,0.4],
+          copay_cards:[0,0.04], virtual_calls:[0,2], Phone_calls:[0,6],
+        };
+        const [lo,hi]=ranges[ch]||[0,5];
+        hcpFieldMeans[h][ch]=rnd(lo,hi);
+      });
+    });
+
+    // Cumulative Brand_Trx per HCP (grows over time)
+    const hcpTrxBase = Object.fromEntries(hcps.map(h=>[h, Math.round(rnd(1,8))]));
+
+    // Pre-compute digital channel values per month (DMA-level, same for all HCPs in that month)
+    const monthlyDigital = {};
+    months.forEach(ym=>{
+      monthlyDigital[ym]={};
+      digitalChs.forEach(ch=>{
+        monthlyDigital[ym][ch]=Math.max(0, Math.round(dmaDigitalMeans[dma][ch]*(0.8+Math.random()*0.4)));
+      });
+    });
+
+    // ── Key fix: outer loop = HCP, inner loop = Month ────────────────────────
+    // This ensures each HCP's full time series is contiguous in the output file
+    // giving the correct unique key structure: Customer_ID × Month_ID
+    hcps.forEach(h=>{
+      months.forEach((ym,mIdx)=>{
+        const trx = Math.max(1, Math.round(hcpTrxBase[h] + mIdx*rnd(0.5,2) + (Math.random()-0.3)*2));
+        const row = { Customer_ID:h, Month_ID:ym, DMA:dma, Brand_Trx:trx };
+        // Field channels — HCP-level float values
+        fieldChs.forEach(ch=>{
+          const mean=hcpFieldMeans[h][ch];
+          row[ch]=parseFloat(Math.max(0,mean*(0.5+Math.random())).toFixed(3));
+        });
+        // Digital channels — DMA-level integers (same for all HCPs in this DMA×Month)
+        digitalChs.forEach(ch=>{ row[ch]=monthlyDigital[ym][ch]; });
+        row.specialtygrouping = hcpSpec[h];
+        row.brand   = brand;
+        row.Seg_col = seg;
+        baseRows.push(row);
       });
     });
   });
 
-  return {salesRows,spendRows};
+  // ── DMA FILE: DMA × Month aggregate ──────────────────────────────────────
+  // Key = "${DMA}_${Month_ID}" — guarantees DMA×Month_ID composite key is unique
+  const dmaAgg={};
+  baseRows.forEach(r=>{
+    const key=`${r.DMA}_${r.Month_ID}`;
+    if(!dmaAgg[key]) dmaAgg[key]={DMA:r.DMA,Month_ID:r.Month_ID,Brand_Trx:0};
+    dmaAgg[key].Brand_Trx+=r.Brand_Trx;
+  });
+
+  const dmaRows = Object.values(dmaAgg).map(row=>{
+    const out={DMA:row.DMA, Month_ID:row.Month_ID, Brand_Trx:row.Brand_Trx};
+    // DMA-level channels — one float per channel per DMA×Month
+    dmaChs.forEach(ch=>{ out[ch]=parseFloat(rnd(0.1,2.2).toFixed(5)); });
+    out.Brand=brand;
+    return out;
+  }).sort((a,b)=>a.DMA.localeCompare(b.DMA)||a.Month_ID-b.Month_ID);
+
+  return {baseRows, dmaRows};
 }
 
 // ─── Reusable UI ─────────────────────────────────────────────────────────────
@@ -385,37 +767,127 @@ function Field({label,children}){return <div style={S.field}><label style={S.lab
 function Input({value,onChange,type="text",step}){return <input style={S.input} type={type} step={step} value={value} onChange={e=>onChange(e.target.value)}/>;}
 function NumInput({value,onChange,step=1}){return <Input type="number" step={step} value={value} onChange={v=>onChange(Number(v))}/>;}
 
-function PreviewPanel({files,activeTab,setActiveTab,tabKeys}){
+function PreviewPanel({files,activeTab,setActiveTab,tabKeys,onGenerate,generating=false,genDisabled=false,genColor=accent}){
   if(!files) return(
-    <div style={{...S.panel,textAlign:"center",padding:"60px 20px"}}>
-      <div style={{fontSize:"40px",marginBottom:"16px",opacity:0.3}}>◈</div>
-      <p style={{color:textSecondary,fontSize:"13px"}}>Configure settings and click<br/><strong style={{color:accent}}>GENERATE FILES</strong></p>
+    <div style={{...S.panel,textAlign:"center",padding:"60px 20px",display:"flex",flexDirection:"column",alignItems:"center",gap:"16px"}}>
+      <div style={{fontSize:"40px",opacity:0.3}}>◈</div>
+      <p style={{color:textSecondary,fontSize:"13px"}}>Configure settings on the left, then generate</p>
+      {onGenerate&&(
+        <button style={{...S.primaryBtn(genColor),width:"auto",padding:"10px 28px",marginTop:0}}
+          onClick={onGenerate} disabled={genDisabled||generating}>
+          {generating?"⏳ Generating…":"▶ Generate Files"}
+        </button>
+      )}
     </div>
   );
   const f=files[activeTab];
+  // Always show ALL columns from the actual row object, not just the preview subset
+  const allCols = f && f.rows.length > 0 ? Object.keys(f.rows[0]) : (f?.cols || []);
   return(
     <div style={S.panel}>
-      <div style={{display:"flex",gap:"8px",marginBottom:"16px",flexWrap:"wrap"}}>
-        {tabKeys.map(t=><button key={t} onClick={()=>setActiveTab(t)} style={{padding:"5px 16px",borderRadius:"6px",border:`1px solid ${activeTab===t?accent:border}`,background:activeTab===t?`${accent}22`:"transparent",color:activeTab===t?accent:textSecondary,fontSize:"12px",cursor:"pointer",fontFamily:"inherit",fontWeight:"700"}}>{t}</button>)}
+      {/* Tab switcher */}
+      <div style={{display:"flex",gap:"8px",marginBottom:"14px",flexWrap:"wrap"}}>
+        {tabKeys.map(t=><button key={t} onClick={()=>setActiveTab(t)}
+          style={{padding:"5px 16px",borderRadius:"6px",fontSize:"12px",cursor:"pointer",fontFamily:"inherit",fontWeight:"700",
+            border:`1px solid ${activeTab===t?accent:border}`,
+            background:activeTab===t?`${accent}22`:"transparent",
+            color:activeTab===t?accent:textSecondary}}>{t}</button>)}
       </div>
       {f&&<>
-        <div style={{marginBottom:"12px"}}>
-          <span style={S.stat}>Rows: <strong>{f.rows.length}</strong></span>
-          <span style={S.stat}>Cols: <strong>{Object.keys(f.rows[0]||{}).length}</strong></span>
+        {/* Stats row — no download button here */}
+        <div style={{marginBottom:"10px"}}>
+          <span style={S.stat}>Rows: <strong>{f.rows.length.toLocaleString()}</strong></span>
+          <span style={S.stat}>Cols: <strong>{allCols.length}</strong></span>
         </div>
-        <div style={{display:"flex",justifyContent:"flex-end",marginBottom:"10px"}}>
-          <button style={S.downloadBtn} onClick={()=>downloadCSV(f.label,f.rows)}>↓ {f.label}</button>
-        </div>
-        <div style={{overflowX:"auto",maxHeight:"220px",overflowY:"auto"}}>
-          <table style={{width:"100%",borderCollapse:"collapse",fontSize:"11px"}}>
-            <thead><tr>{f.cols.map(c=><th key={c} style={S.th}>{c}</th>)}</tr></thead>
-            <tbody>{f.rows.slice(0,40).map((r,i)=><tr key={i}>{f.cols.map(c=><td key={c} style={S.td}>{r[c]}</td>)}</tr>)}</tbody>
+
+        {/* Scrollable table — horizontal + vertical scroll, all columns visible */}
+        <div style={{
+          overflowX:"auto", overflowY:"auto",
+          maxHeight:"calc(100vh - 320px)", minHeight:"200px",
+          border:`1px solid ${border}`, borderRadius:"6px",
+        }}>
+          <table style={{
+            borderCollapse:"collapse", fontSize:"11px",
+            tableLayout:"auto",
+            width:"max-content",
+            minWidth:"100%",
+          }}>
+            <thead>
+              <tr style={{position:"sticky",top:0,zIndex:2}}>
+                {allCols.map((c,ci)=>(
+                  <th key={c} style={{
+                    ...S.th,
+                    position:"sticky", top:0,
+                    background:surfaceLight,
+                    whiteSpace:"nowrap",
+                    padding:"6px 10px",
+                    fontSize:"10px",
+                    fontWeight:"700",
+                    letterSpacing:"0.04em",
+                    borderRight:`1px solid ${border}`,
+                    color: ci===0 ? accent : textSecondary,
+                  }}>{c}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {f.rows.slice(0,100).map((r,i)=>(
+                <tr key={i} style={{background: i%2===0 ? "transparent" : `${surfaceLight}88`}}>
+                  {allCols.map((c,ci)=>(
+                    <td key={c} style={{
+                      ...S.td,
+                      whiteSpace:"nowrap",
+                      padding:"4px 10px",
+                      borderRight:`1px solid ${border}22`,
+                      maxWidth:"180px",
+                      overflow:"hidden",
+                      textOverflow:"ellipsis",
+                      color: ci===0 ? accent : textPrimary,
+                      fontSize:"11px",
+                    }}>
+                      {r[c]??"-"}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
           </table>
-          {f.rows.length>40&&<div style={{textAlign:"center",padding:"8px",color:textSecondary,fontSize:"11px"}}>Showing 40 of {f.rows.length} rows</div>}
+          {f.rows.length>100&&(
+            <div style={{padding:"8px 12px",color:textSecondary,fontSize:"11px",
+              background:surfaceLight,borderTop:`1px solid ${border}`,textAlign:"center"}}>
+              Showing 100 of {f.rows.length.toLocaleString()} rows · download CSV for full dataset
+            </div>
+          )}
         </div>
-        <div style={{marginTop:"16px",borderTop:`1px solid ${border}`,paddingTop:"14px",display:"flex",gap:"10px",flexWrap:"wrap"}}>
-          <span style={{...S.label,alignSelf:"center"}}>Download all:</span>
-          {tabKeys.map(t=><button key={t} style={{...S.downloadBtn,borderColor:border,color:textSecondary}} onClick={()=>downloadCSV(files[t].label,files[t].rows)}>{files[t].label}</button>)}
+
+        {/* Bottom bar: download left, regenerate right */}
+        <div style={{marginTop:"12px",display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:"10px",flexWrap:"wrap"}}>
+          {/* Left: download active + other files */}
+          <div style={{display:"flex",flexDirection:"column",gap:"8px"}}>
+            <button style={{...S.primaryBtn(),width:"auto",padding:"8px 20px",marginTop:0}}
+              onClick={()=>downloadCSV(f.label,f.rows)}>
+              ↓ Download {f.label}
+            </button>
+            {tabKeys.length > 1 && (
+              <div style={{display:"flex",gap:"8px",flexWrap:"wrap",alignItems:"center"}}>
+                <span style={{...S.label,marginBottom:0,fontSize:"10px"}}>Other files:</span>
+                {tabKeys.filter(t=>t!==activeTab).map(t=>(
+                  <button key={t}
+                    style={{...S.downloadBtn,fontSize:"10px",padding:"4px 12px"}}
+                    onClick={()=>downloadCSV(files[t].label,files[t].rows)}>
+                    ↓ {files[t].label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          {/* Right: re-generate button */}
+          {onGenerate&&(
+            <button style={{...S.primaryBtn(genColor),width:"auto",padding:"8px 20px",marginTop:0,flexShrink:0}}
+              onClick={onGenerate} disabled={genDisabled||generating}>
+              {generating?"⏳ Generating…":"▶ Re-generate"}
+            </button>
+          )}
         </div>
       </>}
     </div>
@@ -427,12 +899,15 @@ function LandingScreen({onSelect}){
   const [hov,setHov]=useState(null);
   const opts=[
     {id:"external",label:"External Model",badge:"MMX",color:accent,icon:"⬡",desc:"Generate RC_File, Sales_File & Spend_File for external MMx model ingestion.",files:["RC_File.csv","Sales_File.csv","Spend_File.csv"],available:true},
-    {id:"internal",label:"Internal Model",badge:"INT",color:accentBlue,icon:"◈",desc:"Generate synthetic datasets for internal model development and validation.",files:["Panel_Data.csv","Config_File.csv","DMA_Sales.csv","DMA_Spend.csv"],available:true},
+    {id:"internal",label:"Internal Model",badge:"INT",color:accentBlue,icon:"◈",desc:"Generate synthetic datasets for internal model development and validation.",files:["Actual_Data.csv","Ground_Truth.csv","Base_Data_{Brand}.csv","DMA_Data_{Brand}.csv"],available:true},
   ];
   return(
     <div style={S.app}>
       <div style={{...S.header,paddingBottom:"18px"}}>
-        <h1 style={S.title}><span style={S.badge()}>MMX</span>Model File Designer</h1>
+        <h1 style={S.title}>
+          <span style={{fontSize:"24px",fontWeight:"900",letterSpacing:"0.06em",color:textPrimary,marginRight:"10px"}}>DataTron</span>
+          <span style={{fontSize:"13px",color:textSecondary,letterSpacing:"0.04em",fontWeight:"400"}}>Marketing Mix Data Generator</span>
+        </h1>
         <p style={S.subtitle}>Select the model type to configure and generate sample data files</p>
       </div>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"24px",maxWidth:"800px",margin:"60px auto 0"}}>
@@ -463,8 +938,8 @@ function LandingScreen({onSelect}){
 function InternalSubScreen({onSelect,onBack}){
   const [hov,setHov]=useState(null);
   const opts=[
-    {id:"basicmodel",label:"Basic Model Dataset",badge:"BASIC",color:accentBlue,icon:"◫",desc:"Generate a fully synthetic HCP-level panel dataset with configurable segments, channels, adstock, transformations, and dependent variable — based on the internal model reference code.",files:["Panel_Data.csv","Config_File.csv"]},
-    {id:"dma",label:"DMA Model Dataset Pair",badge:"DMA",color:accentAmber,icon:"⊞",desc:"Generate geographically-structured DMA-level Sales and Spend datasets with GRP data, suitable for geo-level marketing mix modeling.",files:["DMA_Sales.csv","DMA_Spend.csv"]},
+    {id:"basicmodel",label:"Basic Model Dataset",badge:"BASIC",color:accentBlue,icon:"◫",desc:"Generate a fully synthetic HCP-level panel dataset with configurable segments, channels, adstock, transformations, and dependent variable — based on the internal model reference code.",files:["Actual_Data.csv","Ground_Truth.csv"]},
+    {id:"dma",label:"DMA Model Dataset Pair",badge:"DMA",color:accentAmber,icon:"⊞",desc:"Generate HCP-level Base Data and DMA-level aggregate dataset — two compatible files for geo-level marketing mix modeling.",files:["Base_Data_{Brand}.csv","DMA_Data_{Brand}.csv"]},
   ];
   return(
     <div style={S.app}>
@@ -564,8 +1039,20 @@ function ExternalDesigner({onBack}){
   // Promo cost granularity
   const [costMode,setCostMode] = useState("channel"); // "channel" | "segment" | "matrix"
 
+  // Per-channel adstock type: Lambda (exponential decay) or Prom_lag (explicit lag coefficients)
+  const [chAdstockTypes,setChAdstockTypes] = useState(
+    Object.fromEntries(EXT_CHANNELS.map(ch=>([ch, ch==="rebates"||ch==="e_mails" ? "Lambda" : "Prom_lag"])))
+  );
+  const setChAdstock = (ch, val) => setChAdstockTypes(t=>({...t,[ch]:val}));
+
+  // Per-channel equation type: EXP | LOG | POW | LIN
+  const [chEquationTypes,setChEquationTypes] = useState(
+    Object.fromEntries(EXT_CHANNELS.map(ch=>([ch, ch==="rebates" ? "LIN" : "EXP"])))
+  );
+  const setChEquation = (ch, val) => setChEquationTypes(t=>({...t,[ch]:val}));
+
   // Accordion open/close state
-  const [openSections,setOpenSections] = useState({identity:true,segments:false,channels:false,sales:false,promo:false});
+  const [openSections,setOpenSections] = useState({identity:true,segments:false,channels:false,adstock:false,equation:false,sales:false,promo:false});
   const toggleSection = (key) => setOpenSections(o=>({...o,[key]:!o[key]}));
 
   const [gen,setGen]=useState(null);
@@ -592,6 +1079,29 @@ function ExternalDesigner({onBack}){
       const newPromoCosts = Object.fromEntries(chs.map(ch => [ch, c.promoCosts?.[ch] ?? parseFloat((Math.random()*50+5).toFixed(2))]));
       const newPromoUnits = Object.fromEntries(c.segments.map(seg => [seg, Object.fromEntries(chs.map(ch => [ch, c.promoUnits?.[seg]?.[ch] ?? Math.round(8000 * Math.pow(0.75, c.segments.indexOf(seg)))]))]));
       return { ...c, channels: chs, promoCosts: newPromoCosts, promoUnits: newPromoUnits };
+    });
+    // Initialise adstock type for any new channels (preserve existing choices)
+    setChAdstockTypes(prev => {
+      const next = {...prev};
+      chs.forEach(ch => {
+        if(!(ch in next)){
+          const ADS_FOR_CH_LOCAL = {rebates:"Lambda",formulary_support:"Lambda",sample_drops:"Lambda",copay_card:"Lambda",pull_through:"Lambda",payer_education:"Lambda",GPO_contracts:"Lambda",webinar:"Lambda",webinars:"Lambda",DTC_TV:"Lambda",OOH:"Lambda"};
+          next[ch] = ADS_FOR_CH_LOCAL[ch] ?? "Prom_lag";
+        }
+      });
+      return next;
+    });
+    // Initialise equation type for any new channels (preserve existing choices)
+    setChEquationTypes(prev => {
+      const next = {...prev};
+      const EQ_DEFAULTS = {rebates:"LIN",formulary_support:"LIN",sample_drops:"LIN",copay_card:"LIN",
+        pull_through:"LIN",payer_education:"LIN",GPO_contracts:"LIN",field_reimbursement:"LIN",
+        lunch_and_learn:"LOG",symposium:"LOG",CME_events:"LOG",emails:"LOG",samples:"LOG",
+        publications:"POW",HEOR:"POW",KOL_engagement:"POW",digital_ads:"POW",direct_mail:"POW"};
+      chs.forEach(ch => {
+        if(!(ch in next)) next[ch] = EQ_DEFAULTS[ch] ?? "EXP";
+      });
+      return next;
     });
   }, []);
 
@@ -755,23 +1265,23 @@ function ExternalDesigner({onBack}){
     setGen({
       sales: buildExtSales(cfg),
       spend: buildExtSpend({...cfg, promoCostMatrix: flatCosts}),
-      rc:    buildExtRC(cfg),
+      rc:    buildExtRC({...cfg, chAdstockTypes, chEquationTypes}),
     });
     setTab("RC");
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[cfg, costMode]);
 
   const files=gen?{
-    RC:    {label:"RC_File.csv",    rows:gen.rc,    cols:["Brand","Level","Channel","ShortTermA","Curvature","mROI","Equation","Adstock_Months","Decay_Lambda","Nsales_lag","Historical_LT_Period"]},
-    Sales: {label:"Sales_File.csv", rows:gen.sales, cols:["yearmonth","Segment_column","Sales_Unit","Unit_Price","Sales","Period_Type"]},
-    Spend: {label:"Spend_File.csv", rows:gen.spend, cols:["Segment_column","yearmonth","Channel","Promotional_units","Promotion_Unit_Cost","Spend","Period_Type"]},
+    RC:    {label:"RC_File.csv",    rows:gen.rc,    cols:cfg.nSalesLag>0 ? ["Brand","Level","Channel","ShortTermA","Curvature","TRx_lag_1","TRx_lag_2","TRx_lag_3","Equation","Adstock_Type","Adstock_Months","Decay_Lambda","mROI","Nsales_lag"] : ["Brand","Level","Channel","ShortTermA","Curvature","Equation","Adstock_Type","Adstock_Months","Decay_Lambda","mROI","Nsales_lag"]},
+    Sales: {label:"Sales_File.csv", rows:gen.sales, cols:["yearmonth","Segment_column","Sales_Unit","Unit_Price","Sales"]},
+    Spend: {label:"Spend_File.csv", rows:gen.spend, cols:["Segment_column","yearmonth","Channel","Promotional_units","Promotion_Unit_Cost","Spend"]},
   }:null;
 
 
   return(
     <div style={S.app}>
       <div style={{...S.header,paddingBottom:"18px"}}>
-        <h1 style={S.title}><BackBtn onBack={onBack}/><span style={S.badge()}>MMX</span>External Model File Designer</h1>
+        <h1 style={S.title}><BackBtn onBack={onBack}/><span style={S.badge()}>MMX</span>External Model</h1>
         <p style={S.subtitle}>Configure inputs to generate RC_File · Sales_File · Spend_File</p>
       </div>
       <div style={S.mainGrid}>
@@ -1008,6 +1518,142 @@ function ExternalDesigner({onBack}){
               )
             },
             {
+              key:"adstock", label:"Adstock Config", icon:"⏱️",
+              summary:`${cfg.channels.length} channels · ${Object.values(chAdstockTypes).filter(v=>v==="Lambda").length} Lambda · ${Object.values(chAdstockTypes).filter(v=>v==="Prom_lag").length} Prom_lag`,
+              content:(
+                <div style={{padding:"16px 20px"}}>
+                  {/* Legend */}
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"6px",marginBottom:"12px"}}>
+                    <div style={{background:`${accent}0D`,border:`1px solid ${accent}22`,borderRadius:"6px",padding:"8px 10px"}}>
+                      <div style={{fontSize:"11px",fontWeight:"700",color:accent,marginBottom:"3px"}}>λ Lambda</div>
+                      <div style={{fontSize:"10px",color:textSecondary,lineHeight:"1.4"}}>Exponential decay · Decay_Lambda &gt; 0 · lag coeffs = 0</div>
+                    </div>
+                    <div style={{background:`${accentBlue}0D`,border:`1px solid ${accentBlue}22`,borderRadius:"6px",padding:"8px 10px"}}>
+                      <div style={{fontSize:"11px",fontWeight:"700",color:accentBlue,marginBottom:"3px"}}>📊 Prom_lag</div>
+                      <div style={{fontSize:"10px",color:textSecondary,lineHeight:"1.4"}}>Explicit lags [0.7→0.05] · Decay_Lambda = 0</div>
+                    </div>
+                  </div>
+
+                  {/* Quick set all */}
+                  <div style={{display:"flex",gap:"6px",marginBottom:"12px"}}>
+                    <button onClick={()=>setChAdstockTypes(Object.fromEntries(cfg.channels.map(ch=>[ch,"Lambda"])))}
+                      style={{flex:1,padding:"5px 0",borderRadius:"5px",border:`1px solid ${accent}`,background:"transparent",
+                        color:accent,fontSize:"10px",fontWeight:"700",cursor:"pointer",fontFamily:"inherit",letterSpacing:"0.04em"}}>
+                      All → λ Lambda
+                    </button>
+                    <button onClick={()=>setChAdstockTypes(Object.fromEntries(cfg.channels.map(ch=>[ch,"Prom_lag"])))}
+                      style={{flex:1,padding:"5px 0",borderRadius:"5px",border:`1px solid ${accentBlue}`,background:"transparent",
+                        color:accentBlue,fontSize:"10px",fontWeight:"700",cursor:"pointer",fontFamily:"inherit",letterSpacing:"0.04em"}}>
+                      All → 📊 Prom_lag
+                    </button>
+                  </div>
+
+                  {/* Per-channel rows — compact 2-col layout */}
+                  <div style={{display:"flex",flexDirection:"column",gap:"5px"}}>
+                    {cfg.channels.map(ch=>{
+                      const cur = chAdstockTypes[ch] || "Prom_lag";
+                      return(
+                        <div key={ch} style={{display:"grid",gridTemplateColumns:"1fr auto",alignItems:"center",gap:"8px",
+                          background:surfaceLight,border:`1px solid ${cur==="Lambda"?`${accent}44`:`${accentBlue}44`}`,
+                          borderRadius:"7px",padding:"8px 12px",boxSizing:"border-box",width:"100%"}}>
+                          {/* Channel name — truncates if too long */}
+                          <span style={{fontSize:"11px",fontWeight:"600",color:textPrimary,
+                            overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                            {ch}
+                          </span>
+                          {/* Toggle pill */}
+                          <div style={{display:"flex",borderRadius:"5px",overflow:"hidden",border:`1px solid ${border}`,flexShrink:0}}>
+                            <button onClick={()=>setChAdstock(ch,"Lambda")}
+                              style={{padding:"3px 10px",border:"none",fontSize:"10px",fontWeight:"700",
+                                cursor:"pointer",fontFamily:"inherit",transition:"all 0.12s",whiteSpace:"nowrap",
+                                background:cur==="Lambda"?accent:surfaceLight,
+                                color:cur==="Lambda"?bg:textSecondary}}>
+                              λ Lambda
+                            </button>
+                            <button onClick={()=>setChAdstock(ch,"Prom_lag")}
+                              style={{padding:"3px 10px",border:"none",fontSize:"10px",fontWeight:"700",
+                                cursor:"pointer",fontFamily:"inherit",transition:"all 0.12s",whiteSpace:"nowrap",
+                                background:cur==="Prom_lag"?accentBlue:surfaceLight,
+                                color:cur==="Prom_lag"?bg:textSecondary}}>
+                              Prom_lag
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )
+            },
+            {
+              key:"equation", label:"Equation Type", icon:"📈",
+              summary:`${cfg.channels.map(ch=>(chEquationTypes[ch]||"EXP")).join(", ").slice(0,60)}${cfg.channels.length>6?" …":""}`,
+              content:(
+                <div style={{padding:"16px 20px"}}>
+                  {/* Legend */}
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"6px",marginBottom:"12px"}}>
+                    {[
+                      {eq:"EXP", color:accent,      label:"EXP",  desc:"1 − e^(−c·x)  · saturating"},
+                      {eq:"LOG", color:accentBlue,  label:"LOG",  desc:"log(1 + c·x)  · log-curve"},
+                      {eq:"POW", color:accentAmber, label:"POW",  desc:"x^c  · curvature ≤ 0.99"},
+                      {eq:"LIN", color:textSecondary,label:"LIN", desc:"c·x  · linear (rebates)"},
+                    ].map(({eq,color,label,desc})=>(
+                      <div key={eq} style={{background:`${color}0D`,border:`1px solid ${color}22`,borderRadius:"6px",padding:"7px 10px"}}>
+                        <div style={{fontSize:"11px",fontWeight:"700",color,marginBottom:"2px"}}>{label}</div>
+                        <div style={{fontSize:"9px",color:textSecondary,lineHeight:"1.3"}}>{desc}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Quick set all */}
+                  <div style={{display:"flex",gap:"5px",marginBottom:"12px",flexWrap:"wrap"}}>
+                    {["EXP","LOG","POW","LIN"].map(eq=>(
+                      <button key={eq} onClick={()=>setChEquationTypes(Object.fromEntries(cfg.channels.map(ch=>[ch,eq])))}
+                        style={{flex:1,minWidth:"40px",padding:"4px 0",borderRadius:"5px",border:`1px solid ${border}`,background:"transparent",
+                          color:textSecondary,fontSize:"10px",fontWeight:"700",cursor:"pointer",fontFamily:"inherit"}}>
+                        All→{eq}
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Per-channel 4-button pill */}
+                  <div style={{display:"flex",flexDirection:"column",gap:"5px"}}>
+                    {cfg.channels.map(ch=>{
+                      const cur = chEquationTypes[ch] || "EXP";
+                      const colors = {EXP:accent, LOG:accentBlue, POW:accentAmber, LIN:textSecondary};
+                      const curColor = colors[cur] || accent;
+                      return(
+                        <div key={ch} style={{display:"grid",gridTemplateColumns:"1fr auto",alignItems:"center",gap:"8px",
+                          background:surfaceLight,border:`1px solid ${curColor}44`,
+                          borderRadius:"7px",padding:"8px 12px",boxSizing:"border-box"}}>
+                          <span style={{fontSize:"11px",fontWeight:"600",color:textPrimary,
+                            overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{ch}</span>
+                          <div style={{display:"flex",borderRadius:"5px",overflow:"hidden",border:`1px solid ${border}`,flexShrink:0}}>
+                            {["EXP","LOG","POW","LIN"].map(eq=>{
+                              const eqColor = {EXP:accent,LOG:accentBlue,POW:accentAmber,LIN:textSecondary}[eq];
+                              return(
+                                <button key={eq} onClick={()=>setChEquation(ch,eq)}
+                                  style={{padding:"3px 9px",border:"none",fontSize:"10px",fontWeight:"700",
+                                    cursor:"pointer",fontFamily:"inherit",transition:"all 0.12s",whiteSpace:"nowrap",
+                                    background:cur===eq?eqColor:surfaceLight,
+                                    color:cur===eq?bg:textSecondary}}>
+                                  {eq}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div style={{marginTop:"10px",fontSize:"10px",color:textSecondary,lineHeight:"1.5",
+                    background:`${accentAmber}0D`,border:`1px solid ${accentAmber}22`,borderRadius:"5px",padding:"7px 10px"}}>
+                    ⚠️ <strong style={{color:accentAmber}}>POW curvature</strong> is capped at 0.99 in the RC file to ensure diminishing returns
+                  </div>
+                </div>
+              )
+            },
+            {
               key:"sales", label:"Sales Units", icon:"💊",
               summary:`${cfg.segments.map(s=>`${s}: ${(cfg.salesUnits[s]||0).toLocaleString()}`).slice(0,2).join(" · ")}${cfg.segments.length>2?" …":""}`,
               content:(
@@ -1145,15 +1791,85 @@ function ExternalDesigner({onBack}){
           </div>
         </div>
 
-        <PreviewPanel files={files} activeTab={tab} setActiveTab={setTab} tabKeys={["RC","Sales","Spend"]}/>
+        <PreviewPanel files={files} activeTab={tab} setActiveTab={setTab} tabKeys={["RC","Sales","Spend"]} onGenerate={handleGen} genDisabled={cfg.segments.length===0||cfg.channels.length===0} genColor={accent}/>
       </div>
     </div>
   );
 }
 
 // ─── SCREEN: Basic Model Designer ────────────────────────────────────────────
+// ─── Categorical Variable Library ────────────────────────────────────────────
+const CAT_VAR_LIBRARY = {
+  geographical_area: { label:"Geographical Area", icon:"🗺️",
+    values:["Northeast","Southeast","Midwest","Southwest","West","Northwest"] },
+  drug_volume:       { label:"Drug Volume",        icon:"💊",
+    values:["Very_High","High","Medium","Low","Very_Low"] },
+  region:            { label:"Region",             icon:"📍",
+    values:["Region_1","Region_2","Region_3","Region_4","Region_5","Region_6"] },
+  category:          { label:"Category",           icon:"🏷️",
+    values:["Category_A","Category_B","Category_C","Category_D"] },
+  specialty:         { label:"HCP Specialty",      icon:"🩺",
+    values:["Cardiologist","Internist","GP","Neurologist","Oncologist","Rheumatologist","Dermatologist"] },
+  market_tier:       { label:"Market Tier",        icon:"📊",
+    values:["Tier_1","Tier_2","Tier_3","Tier_4"] },
+  payer_type:        { label:"Payer Type",         icon:"💳",
+    values:["Commercial","Medicare","Medicaid","Cash_Pay","Other"] },
+  channel_affinity:  { label:"Channel Affinity",   icon:"📡",
+    values:["Digital_First","Field_First","Balanced","Low_Engagement"] },
+  custom:            { label:"Custom",             icon:"✏️",  values:[] },
+};
+
 function BasicModelDesigner({onBack}){
-  const [cfg,setCfg]=useState({nSegments:5,nHCP:500,nMonths:24,nChannels:6,nLags:3,nAdstock:3,noiseRatio:0.1,secondaryNoise:0.02,valueIntercept:20,valueAsymptote:5,valueLag:0.5,startMonth:"2020-01",curvature:1.0,distPoisson:0.5,distNormal:0.25,distFlat:0.25,trExp:0.5,trLog:0.25,trPower:0.2,trLinear:0.05});
+  const [cfg,setCfg]=useState({brand:"Test_Brand",nSegments:5,nHCP:500,nMonths:24,nChannels:6,nLags:3,nAdstock:3,noiseRatio:0.1,secondaryNoise:0.02,valueIntercept:20,valueAsymptote:5,valueLag:0.5,startMonth:"2020-01",curvature:1.0,distPoisson:0.5,distNormal:0.25,distFlat:0.25,trExp:0.5,trLog:0.25,trPower:0.2,trLinear:0.05,
+    channelNames:["conference","detailing","e_mails","social_media","webinar","rebates"],
+    catVarDefs:[ // each: {name, type, values[]}
+      {name:"geographical_area", type:"geographical_area", values:["Northeast","Southeast","Midwest","Southwest","West"]},
+    ]
+  });
+  // Channel picker state (mirrors External Model)
+  const [basicChMode,setBasicChMode]           = useState("library");
+  const [basicNChannels,setBasicNChannels]      = useState(6);
+  const [basicCustomChInput,setBasicCustomChInput] = useState("");
+  const [basicSavedChs,setBasicSavedChs]        = useState(loadStoredChannels);
+
+  const applyBasicChannels = useCallback((chs)=>{
+    setCfg(c=>({...c, channelNames:chs, nChannels:chs.length}));
+  },[]);
+
+  const basicRandomPick = useCallback((n)=>{
+    const pool=[...ALL_PHARMA_CHANNELS];
+    const picked=[];
+    while(picked.length<Math.min(n,pool.length)){const idx=Math.floor(Math.random()*pool.length);picked.push(pool.splice(idx,1)[0]);}
+    while(picked.length<n) picked.push(`Ch_${picked.length+1}`);
+    return picked;
+  },[]);
+
+  const addBasicCustomCh = useCallback(()=>{
+    const v=basicCustomChInput.trim().replace(/\s+/g,"_");
+    if(!v) return;
+    const current=cfg.channelNames||[];
+    const updated=current.includes(v)?current:[...current,v];
+    applyBasicChannels(updated);
+    if(!basicSavedChs.includes(v)){const next=[...basicSavedChs,v];setBasicSavedChs(next);saveStoredChannels(next);}
+    setBasicCustomChInput("");
+  },[basicCustomChInput,cfg.channelNames,basicSavedChs,applyBasicChannels]);
+
+  const removeBasicCh = useCallback((ch)=>{
+    applyBasicChannels((cfg.channelNames||[]).filter(x=>x!==ch));
+  },[cfg.channelNames,applyBasicChannels]);
+
+  const toggleBasicLibCh = useCallback((ch)=>{
+    const current=cfg.channelNames||[];
+    applyBasicChannels(current.includes(ch)?current.filter(x=>x!==ch):[...current,ch]);
+  },[cfg.channelNames,applyBasicChannels]);
+
+  const [newCatType,setNewCatType]   = useState("geographical_area");
+  const [newCatName,setNewCatName]   = useState("");
+  const [newCatCustomVal,setNewCatCustomVal] = useState("");
+  // Accordion state
+  const [openB,setOpenB] = useState({structure:true,channels:false,model:false,distributions:false,catvars:false});
+  const toggleB = (key) => setOpenB(o=>({...o,[key]:!o[key]}));
+
   const [gen,setGen]=useState(null);
   const [tab,setTab]=useState("Panel");
   const [loading,setLoading]=useState(false);
@@ -1172,8 +1888,8 @@ function BasicModelDesigner({onBack}){
   },[cfg]);
 
   const files=gen?{
-    Panel:{label:"Panel_Data.csv",rows:gen.panelRows,cols:["HCP_ID","Month_ID","Segment","Sales","Channel_Contribution","Intercept_Value"]},
-    Config:{label:"Config_File.csv",rows:gen.configRows,cols:["Segment","Channel","Distribution","Transformation","Adstock_Lambda","Asymptote","Intercept","LagSum","Curvature"]},
+    Panel:{label:"Actual_Data.csv",rows:gen.panelRows,cols:["HCP_ID","Month_ID","Seg_column",...gen.meta.catVarNames,...gen.meta.channels,"Sales_with_noise","Brand"]},
+    Config:{label:"Ground_Truth.csv",rows:gen.configRows,cols:["Segment","Channel","Distribution","Transformation","Adstock_Lambda","Mean_Promo","Asymptote","Intercept","Lag_Sum","Curvature"]},
   }:null;
 
   return(
@@ -1183,113 +1899,644 @@ function BasicModelDesigner({onBack}){
         <p style={S.subtitle}>Synthetic HCP-level panel data with configurable channels, segments, adstock & response curves</p>
       </div>
       <div style={S.mainGrid}>
-        <div style={{...S.panel,maxHeight:"85vh",overflowY:"auto"}}>
-          <SectionLabel color={accentBlue}>Dataset Structure</SectionLabel>
-          <div style={S.grid2}>
-            <Field label="# Segments"><NumInput value={cfg.nSegments} onChange={v=>s("nSegments",v)}/></Field>
-            <Field label="# HCPs"><NumInput value={cfg.nHCP} onChange={v=>s("nHCP",v)}/></Field>
-            <Field label="# Months"><NumInput value={cfg.nMonths} onChange={v=>s("nMonths",v)}/></Field>
-            <Field label="# Channels"><NumInput value={cfg.nChannels} onChange={v=>s("nChannels",v)}/></Field>
-            <Field label="# Lags"><NumInput value={cfg.nLags} onChange={v=>s("nLags",v)}/></Field>
-            <Field label="Adstock Months"><NumInput value={cfg.nAdstock} onChange={v=>s("nAdstock",v)}/></Field>
+        <div style={{...S.panel, maxHeight:"88vh", overflowY:"auto", padding:"0"}}>
+          {[
+            {
+              key:"structure", label:"Dataset Structure", icon:"🏗️",
+              summary:`${cfg.brand} · ${cfg.nSegments} segs · ${cfg.nHCP} HCPs · ${cfg.nMonths} months · starts ${cfg.startMonth}`,
+              content:(
+                <div style={{padding:"16px 20px"}}>
+                  <Field label="Brand Name"><input style={S.input} value={cfg.brand} onChange={e=>setCfg(c=>({...c,brand:e.target.value}))}/></Field>
+                  <div style={S.grid2}>
+                    <Field label="# Segments"><NumInput value={cfg.nSegments} onChange={v=>s("nSegments",v)}/></Field>
+                    <Field label="# HCPs"><NumInput value={cfg.nHCP} onChange={v=>s("nHCP",v)}/></Field>
+                    <Field label="# Months"><NumInput value={cfg.nMonths} onChange={v=>s("nMonths",v)}/></Field>
+                    <Field label="# Lags"><NumInput value={cfg.nLags} onChange={v=>s("nLags",v)}/></Field>
+                    <Field label="Adstock Months"><NumInput value={cfg.nAdstock} onChange={v=>s("nAdstock",v)}/></Field>
+                  </div>
+                  <Field label="Start Month (YYYY-MM)"><Input value={cfg.startMonth} onChange={v=>setCfg(c=>({...c,startMonth:v}))}/></Field>
+                </div>
+              )
+            },
+            {
+              key:"channels", label:"Channels", icon:"📡",
+              summary:`${(cfg.channelNames||[]).length} channels · ${basicChMode} · ${(cfg.channelNames||[]).slice(0,3).join(", ")}${(cfg.channelNames||[]).length>3?" …":""}`,
+              content:(
+                <div style={{padding:"16px 20px"}}>
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:"6px",marginBottom:"12px"}}>
+                    {[{id:"library",icon:"📋",label:"Library"},{id:"random",icon:"🎲",label:"Random"},{id:"custom",icon:"✏️",label:"Custom"}].map(m=>(
+                      <button key={m.id} onClick={()=>{setBasicChMode(m.id);if(m.id==="random")applyBasicChannels(basicRandomPick(basicNChannels));}}
+                        style={{padding:"7px 6px",borderRadius:"7px",border:`1px solid ${basicChMode===m.id?accentBlue:border}`,
+                          background:basicChMode===m.id?`${accentBlue}18`:"transparent",cursor:"pointer",fontFamily:"inherit",textAlign:"center"}}>
+                        <div style={{fontSize:"13px"}}>{m.icon}</div>
+                        <div style={{fontSize:"10px",fontWeight:"700",color:basicChMode===m.id?accentBlue:textSecondary}}>{m.label}</div>
+                      </button>
+                    ))}
+                  </div>
+                  {basicChMode==="random" && (
+                    <div style={{marginBottom:"12px"}}>
+                      <span style={{...S.label,marginBottom:"6px"}}>NUMBER OF CHANNELS <span style={{color:accentBlue,fontWeight:"700"}}>{basicNChannels}</span></span>
+                      <div style={{display:"flex",alignItems:"center",gap:"10px",marginBottom:"4px"}}>
+                        <input type="range" min={1} max={50} value={basicNChannels}
+                          onChange={e=>{const n=Number(e.target.value);setBasicNChannels(n);applyBasicChannels(basicRandomPick(n));}}
+                          style={{flex:1,accentColor:accentBlue,cursor:"pointer"}}/>
+                        <input type="number" min={1} max={50} value={basicNChannels}
+                          onChange={e=>{const n=Math.min(50,Math.max(1,Number(e.target.value)));setBasicNChannels(n);applyBasicChannels(basicRandomPick(n));}}
+                          style={{...S.input,width:"58px",textAlign:"center"}}/>
+                      </div>
+                      <button onClick={()=>applyBasicChannels(basicRandomPick(basicNChannels))}
+                        style={{fontSize:"10px",padding:"4px 12px",border:`1px solid ${border}`,borderRadius:"5px",background:"transparent",color:textSecondary,cursor:"pointer",fontFamily:"inherit"}}>
+                        🔀 Re-randomize
+                      </button>
+                    </div>
+                  )}
+                  {basicChMode==="library" && (
+                    <div style={{marginBottom:"10px"}}>
+                      {Object.entries(PHARMA_CHANNEL_LIBRARY).map(([grp,chs])=>(
+                        <div key={grp} style={{marginBottom:"8px"}}>
+                          <div style={{fontSize:"10px",color:textSecondary,fontWeight:"700",letterSpacing:"0.08em",marginBottom:"4px"}}>{grp.toUpperCase()}</div>
+                          <div style={{display:"flex",flexWrap:"wrap",gap:"4px"}}>
+                            {chs.map(ch=>(
+                              <button key={ch} onClick={()=>toggleBasicLibCh(ch)}
+                                style={{...S.checkBtn((cfg.channelNames||[]).includes(ch),accentBlue),fontSize:"10px",padding:"3px 9px"}}>{ch}</button>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {basicChMode==="custom" && (
+                    <div style={{marginBottom:"10px"}}>
+                      <div style={{display:"flex",gap:"8px",marginBottom:"8px"}}>
+                        <input style={{...S.input,flex:1}} placeholder="Type channel name, press Enter…"
+                          value={basicCustomChInput} onChange={e=>setBasicCustomChInput(e.target.value)}
+                          onKeyDown={e=>e.key==="Enter"&&addBasicCustomCh()}/>
+                        <button onClick={addBasicCustomCh} style={{...S.primaryBtn(accentBlue),width:"auto",padding:"8px 12px",marginTop:0}}>+ Add</button>
+                      </div>
+                      {basicSavedChs.length>0 && (
+                        <div style={{marginBottom:"8px"}}>
+                          <div style={{fontSize:"10px",color:accentBlue,fontWeight:"700",letterSpacing:"0.08em",marginBottom:"5px"}}>💾 SAVED — click to add</div>
+                          <div style={{display:"flex",flexWrap:"wrap",gap:"5px"}}>
+                            {basicSavedChs.map(ch=>(
+                              <span key={ch} style={{display:"inline-flex",alignItems:"center",gap:"4px",fontSize:"10px",padding:"3px 9px",borderRadius:"5px",background:`${accentBlue}18`,border:`1px solid ${accentBlue}33`,color:accentBlue}}>
+                                <span style={{cursor:"pointer"}} onClick={()=>{if(!(cfg.channelNames||[]).includes(ch))applyBasicChannels([...(cfg.channelNames||[]),ch]);}}>{ch}</span>
+                                <span style={{cursor:"pointer",opacity:0.6,fontWeight:"900"}} onClick={()=>{const next=basicSavedChs.filter(x=>x!==ch);setBasicSavedChs(next);saveStoredChannels(next);}}>×</span>
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  <div style={{background:`${accentBlue}08`,border:`1px solid ${accentBlue}22`,borderRadius:"7px",padding:"10px"}}>
+                    <div style={{fontSize:"10px",color:accentBlue,fontWeight:"700",letterSpacing:"0.08em",marginBottom:"6px"}}>ACTIVE CHANNELS ({(cfg.channelNames||[]).length})</div>
+                    <div style={{display:"flex",flexWrap:"wrap",gap:"5px"}}>
+                      {(cfg.channelNames||[]).map(ch=>(
+                        <span key={ch} style={{fontSize:"10px",padding:"3px 8px",borderRadius:"20px",background:`${accentBlue}18`,border:`1px solid ${accentBlue}44`,color:accentBlue,display:"inline-flex",alignItems:"center",gap:"5px"}}>
+                          {ch}<span onClick={()=>removeBasicCh(ch)} style={{cursor:"pointer",opacity:0.6,fontWeight:"900",lineHeight:1}}>×</span>
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )
+            },
+            {
+              key:"model", label:"Model Parameters", icon:"⚙️",
+              summary:`Intercept ${cfg.valueIntercept} · Asymptote ${cfg.valueAsymptote} · Lag ${cfg.valueLag} · Curvature ${cfg.curvature}`,
+              content:(
+                <div style={{padding:"16px 20px"}}>
+                  <div style={S.grid2}>
+                    <Field label="Intercept (low seg)"><NumInput step="0.1" value={cfg.valueIntercept} onChange={v=>s("valueIntercept",v)}/></Field>
+                    <Field label="Asymptote (low seg)"><NumInput step="0.1" value={cfg.valueAsymptote} onChange={v=>s("valueAsymptote",v)}/></Field>
+                    <Field label="Lag Sum (low seg)"><NumInput step="0.01" value={cfg.valueLag} onChange={v=>s("valueLag",v)}/></Field>
+                    <Field label="Curvature"><NumInput step="0.1" value={cfg.curvature} onChange={v=>s("curvature",v)}/></Field>
+                    <Field label="Primary Noise Ratio"><NumInput step="0.01" value={cfg.noiseRatio} onChange={v=>s("noiseRatio",v)}/></Field>
+                    <Field label="Secondary Noise"><NumInput step="0.01" value={cfg.secondaryNoise} onChange={v=>s("secondaryNoise",v)}/></Field>
+                  </div>
+                </div>
+              )
+            },
+            {
+              key:"distributions", label:"Distributions & Transforms", icon:"📐",
+              summary:`Poisson ${cfg.distPoisson} · Normal ${cfg.distNormal} · Flat ${cfg.distFlat} | NEG_EXP ${cfg.trExp} · LOG ${cfg.trLog}`,
+              content:(
+                <div style={{padding:"16px 20px"}}>
+                  <span style={{...S.sectionLabel,color:accentBlue,marginBottom:"10px"}}>Distribution Mix</span>
+                  <div style={S.grid2}>
+                    <Field label="Poisson ratio"><NumInput step="0.05" value={cfg.distPoisson} onChange={v=>s("distPoisson",v)}/></Field>
+                    <Field label="Normal ratio"><NumInput step="0.05" value={cfg.distNormal} onChange={v=>s("distNormal",v)}/></Field>
+                    <Field label="Flat ratio"><NumInput step="0.05" value={cfg.distFlat} onChange={v=>s("distFlat",v)}/></Field>
+                  </div>
+                  <span style={{...S.sectionLabel,color:accentBlue,margin:"14px 0 10px"}}>Transformation Mix</span>
+                  <div style={S.grid2}>
+                    <Field label="NEG_EXP ratio"><NumInput step="0.05" value={cfg.trExp} onChange={v=>s("trExp",v)}/></Field>
+                    <Field label="LOG ratio"><NumInput step="0.05" value={cfg.trLog} onChange={v=>s("trLog",v)}/></Field>
+                    <Field label="POWER ratio"><NumInput step="0.05" value={cfg.trPower} onChange={v=>s("trPower",v)}/></Field>
+                    <Field label="LINEAR ratio"><NumInput step="0.05" value={cfg.trLinear} onChange={v=>s("trLinear",v)}/></Field>
+                  </div>
+                </div>
+              )
+            },
+            {
+              key:"catvars", label:"Categorical Variables", icon:"🏷️",
+              summary:`${cfg.catVarDefs.length} variable${cfg.catVarDefs.length!==1?"s":""} · ${cfg.catVarDefs.map(v=>v.name).slice(0,3).join(", ")}${cfg.catVarDefs.length>3?" …":""}`,
+              content:(
+                <div style={{padding:"16px 20px"}}>
+                  <div style={{fontSize:"11px",color:textSecondary,marginBottom:"12px",lineHeight:"1.5"}}>
+                    Each HCP gets a fixed random value per variable — consistent across all months. Columns appear between <strong style={{color:accentBlue}}>Seg_column</strong> and the channel columns.
+                  </div>
+                  {cfg.catVarDefs.map((cv,idx)=>(
+                    <div key={idx} style={{background:surfaceLight,border:`1px solid ${border}`,borderRadius:"7px",padding:"10px 12px",marginBottom:"8px",display:"flex",alignItems:"center",justifyContent:"space-between",gap:"10px"}}>
+                      <div style={{minWidth:0}}>
+                        <div style={{fontSize:"12px",fontWeight:"700",color:accentBlue}}>{cv.name}</div>
+                        <div style={{fontSize:"10px",color:textSecondary,marginTop:"2px",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",maxWidth:"260px"}}>{cv.values.join(" · ")}</div>
+                      </div>
+                      <button onClick={()=>setCfg(c=>({...c,catVarDefs:c.catVarDefs.filter((_,i)=>i!==idx)}))}
+                        style={{background:"none",border:`1px solid ${border}`,color:textSecondary,borderRadius:"5px",padding:"3px 8px",fontSize:"11px",cursor:"pointer",fontFamily:"inherit",flexShrink:0}}>✕</button>
+                    </div>
+                  ))}
+                  <div style={{background:`${accentBlue}08`,border:`1px solid ${accentBlue}22`,borderRadius:"8px",padding:"12px"}}>
+                    <div style={{fontSize:"10px",fontWeight:"700",color:accentBlue,letterSpacing:"0.1em",marginBottom:"10px"}}>+ ADD VARIABLE</div>
+                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"6px",marginBottom:"8px"}}>
+                      {Object.entries(CAT_VAR_LIBRARY).map(([key,p])=>(
+                        <button key={key} onClick={()=>{setNewCatType(key);setNewCatName(key==="custom"?"":key);}}
+                          style={{padding:"7px 10px",borderRadius:"6px",border:`1px solid ${newCatType===key?accentBlue:border}`,
+                            background:newCatType===key?`${accentBlue}18`:"transparent",cursor:"pointer",fontFamily:"inherit",textAlign:"left"}}>
+                          <span style={{fontSize:"12px"}}>{p.icon}</span>
+                          <span style={{fontSize:"11px",fontWeight:"700",color:newCatType===key?accentBlue:textPrimary,marginLeft:"6px"}}>{p.label}</span>
+                        </button>
+                      ))}
+                    </div>
+                    <input style={{...S.input,marginBottom:"8px"}} placeholder="Column name (e.g. region)"
+                      value={newCatName} onChange={e=>setNewCatName(e.target.value.replace(/\s+/g,"_"))}/>
+                    {newCatType!=="custom" && CAT_VAR_LIBRARY[newCatType]?.values.length>0 && (
+                      <div style={{display:"flex",flexWrap:"wrap",gap:"5px",marginBottom:"8px"}}>
+                        {CAT_VAR_LIBRARY[newCatType].values.map(v=>(
+                          <span key={v} style={{fontSize:"10px",padding:"2px 8px",borderRadius:"20px",background:`${accentBlue}18`,border:`1px solid ${accentBlue}33`,color:accentBlue}}>{v}</span>
+                        ))}
+                      </div>
+                    )}
+                    {newCatType==="custom" && (
+                      <div style={{display:"flex",gap:"8px",marginBottom:"8px"}}>
+                        <input style={{...S.input,flex:1}} placeholder="Add value, press Enter"
+                          value={newCatCustomVal} onChange={e=>setNewCatCustomVal(e.target.value)}
+                          onKeyDown={e=>{if(e.key==="Enter"&&newCatCustomVal.trim()){const v=newCatCustomVal.trim().replace(/\s+/g,"_");setCfg(c=>{const ex=c.catVarDefs.find(x=>x.name===newCatName&&x.type==="custom");if(ex)return{...c,catVarDefs:c.catVarDefs.map(x=>x.name===newCatName&&x.type==="custom"?{...x,values:[...x.values,v]}:x)};return c;});setNewCatCustomVal("");}}}/>
+                        <button onClick={()=>{const v=newCatCustomVal.trim().replace(/\s+/g,"_");if(!v)return;setCfg(c=>{const ex=c.catVarDefs.find(x=>x.name===newCatName&&x.type==="custom");if(ex)return{...c,catVarDefs:c.catVarDefs.map(x=>x.name===newCatName&&x.type==="custom"?{...x,values:[...x.values,v]}:x)};return c;});setNewCatCustomVal("");}}
+                          style={{...S.primaryBtn(accentBlue),width:"auto",padding:"8px 12px",marginTop:0}}>+ Val</button>
+                      </div>
+                    )}
+                    <button onClick={()=>{
+                      const name=(newCatName||newCatType).replace(/\s+/g,"_");
+                      if(!name) return;
+                      const vals=newCatType==="custom"?(cfg.catVarDefs.find(x=>x.name===name&&x.type==="custom")?.values||[]):CAT_VAR_LIBRARY[newCatType].values;
+                      if(vals.length===0){alert("Add at least one value for custom variable");return;}
+                      if(cfg.catVarDefs.find(x=>x.name===name)){alert(`Column "${name}" already exists`);return;}
+                      setCfg(c=>({...c,catVarDefs:[...c.catVarDefs,{name,type:newCatType,values:vals}]}));
+                      setNewCatName("");setNewCatType("geographical_area");
+                    }} style={{...S.primaryBtn(accentBlue),marginTop:"4px"}}>
+                      + Add "{(newCatName||newCatType).replace(/\s+/g,"_")}" Column
+                    </button>
+                  </div>
+                </div>
+              )
+            },
+          ].map(({key,label,icon,summary,content})=>(
+            <div key={key} style={{borderBottom:`1px solid ${border}`}}>
+              <button onClick={()=>toggleB(key)} style={{
+                width:"100%",display:"flex",alignItems:"center",justifyContent:"space-between",
+                padding:"14px 20px",background:"transparent",border:"none",cursor:"pointer",
+                fontFamily:"inherit",textAlign:"left",gap:"10px",
+              }}>
+                <div style={{display:"flex",alignItems:"center",gap:"10px",minWidth:0}}>
+                  <span style={{fontSize:"16px",flexShrink:0}}>{icon}</span>
+                  <div style={{minWidth:0}}>
+                    <div style={{fontSize:"12px",fontWeight:"700",color:openB[key]?accentBlue:textPrimary,letterSpacing:"0.04em"}}>{label}</div>
+                    {!openB[key]&&<div style={{fontSize:"10px",color:textSecondary,marginTop:"2px",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",maxWidth:"280px"}}>{summary}</div>}
+                  </div>
+                </div>
+                <span style={{color:openB[key]?accentBlue:textSecondary,fontSize:"16px",flexShrink:0,transition:"transform 0.2s",transform:openB[key]?"rotate(180deg)":"rotate(0deg)"}}>▾</span>
+              </button>
+              {openB[key]&&content}
+            </div>
+          ))}
+          <div style={{padding:"16px 20px"}}>
+            <button style={S.primaryBtn(accentBlue)} onClick={handleGen} disabled={loading}>
+              {loading?"⏳ GENERATING...":"▶ GENERATE DATASET"}
+            </button>
+            {gen&&<div style={{marginTop:"12px",background:`${accentBlue}11`,border:`1px solid ${accentBlue}33`,borderRadius:"6px",padding:"10px",fontSize:"11px",color:textSecondary}}>
+              <span style={{color:accentBlue,fontWeight:"700"}}>Generated:</span> {gen.meta.nRows.toLocaleString()} rows · {gen.meta.segs.length} segs · {gen.meta.channels.length} channels<br/>
+              <span style={{color:accentBlue}}>Columns:</span> HCP_ID · Month_ID · Seg_column{gen.meta.catVarNames.length>0?` · ${gen.meta.catVarNames.join(" · ")}`:""}  · {gen.meta.channels.join(" · ")} · Sales_with_noise · Brand<br/>
+              <span style={{color:accentBlue}}>Transforms:</span> {gen.meta.channels.map((ch,i)=>gen.meta.chTr[i]).join(", ")}
+            </div>}
           </div>
-          <Field label="Start Month (YYYY-MM)"><Input value={cfg.startMonth} onChange={v=>setCfg(c=>({...c,startMonth:v}))}/></Field>
-          <Divider/>
-          <SectionLabel color={accentBlue}>Model Parameters</SectionLabel>
-          <div style={S.grid2}>
-            <Field label="Intercept (low seg)"><NumInput step="0.1" value={cfg.valueIntercept} onChange={v=>s("valueIntercept",v)}/></Field>
-            <Field label="Asymptote (low seg)"><NumInput step="0.1" value={cfg.valueAsymptote} onChange={v=>s("valueAsymptote",v)}/></Field>
-            <Field label="Lag Sum (low seg)"><NumInput step="0.01" value={cfg.valueLag} onChange={v=>s("valueLag",v)}/></Field>
-            <Field label="Curvature"><NumInput step="0.1" value={cfg.curvature} onChange={v=>s("curvature",v)}/></Field>
-            <Field label="Primary Noise Ratio"><NumInput step="0.01" value={cfg.noiseRatio} onChange={v=>s("noiseRatio",v)}/></Field>
-            <Field label="Secondary Noise"><NumInput step="0.01" value={cfg.secondaryNoise} onChange={v=>s("secondaryNoise",v)}/></Field>
-          </div>
-          <Divider/>
-          <SectionLabel color={accentBlue}>Distribution Mix</SectionLabel>
-          <div style={S.grid2}>
-            <Field label="Poisson ratio"><NumInput step="0.05" value={cfg.distPoisson} onChange={v=>s("distPoisson",v)}/></Field>
-            <Field label="Normal ratio"><NumInput step="0.05" value={cfg.distNormal} onChange={v=>s("distNormal",v)}/></Field>
-            <Field label="Flat ratio"><NumInput step="0.05" value={cfg.distFlat} onChange={v=>s("distFlat",v)}/></Field>
-          </div>
-          <Divider/>
-          <SectionLabel color={accentBlue}>Transformation Mix</SectionLabel>
-          <div style={S.grid2}>
-            <Field label="NEG_EXP ratio"><NumInput step="0.05" value={cfg.trExp} onChange={v=>s("trExp",v)}/></Field>
-            <Field label="LOG ratio"><NumInput step="0.05" value={cfg.trLog} onChange={v=>s("trLog",v)}/></Field>
-            <Field label="POWER ratio"><NumInput step="0.05" value={cfg.trPower} onChange={v=>s("trPower",v)}/></Field>
-            <Field label="LINEAR ratio"><NumInput step="0.05" value={cfg.trLinear} onChange={v=>s("trLinear",v)}/></Field>
-          </div>
-          <button style={S.primaryBtn(accentBlue)} onClick={handleGen} disabled={loading}>
-            {loading?"⏳ GENERATING...":"▶ GENERATE DATASET"}
-          </button>
-          {gen&&<div style={{marginTop:"12px",background:`${accentBlue}11`,border:`1px solid ${accentBlue}33`,borderRadius:"6px",padding:"10px",fontSize:"11px",color:textSecondary}}>
-            <span style={{color:accentBlue,fontWeight:"700"}}>Generated:</span> {gen.meta.nRows.toLocaleString()} rows · {gen.meta.segs.length} segments · {gen.meta.channels.length} channels<br/>
-            <span style={{color:accentBlue}}>Transforms:</span> {gen.meta.channels.map((ch,i)=>gen.meta.chTr[i]).join(", ")}
-          </div>}
         </div>
-        <PreviewPanel files={files} activeTab={tab} setActiveTab={setTab} tabKeys={["Panel","Config"]}/>
+
+                <PreviewPanel files={files} activeTab={tab} setActiveTab={setTab} tabKeys={["Panel","Config"]} onGenerate={handleGen} generating={loading} genColor={accentBlue}/>
       </div>
     </div>
   );
 }
 
-// ─── SCREEN: DMA Model Designer ───────────────────────────────────────────────
+// ─── SCREEN: DMA Model Designer (Two-Step) ───────────────────────────────────
 function DMADesigner({onBack}){
-  const [cfg,setCfg]=useState({nDMA:20,startDate:"2022-01",endDate:"2024-06",unitPrice:80,minSales:5000,maxSales:50000,minSpend:100,maxSpend:1500,dmaChannels:["TV","Digital","Print","OOH","Radio"]});
-  const [gen,setGen]=useState(null);
-  const [tab,setTab]=useState("Sales");
-  const [newCh,setNewCh]=useState("");
+  const [step,setStep]   = useState(1);          // 1 = Base Data, 2 = DMA Data
+  const [baseGen,setBaseGen] = useState(null);   // generated base rows
+  const [dmaGen,setDmaGen]   = useState(null);   // generated dma rows
+  const [tab,setTab]     = useState("Base");
+  const [loading,setLoading] = useState(false);
 
-  const files=gen?{Sales:{label:"DMA_Sales.csv",rows:gen.salesRows,cols:["yearmonth","DMA","Sales_Unit","Unit_Price","Sales"]},Spend:{label:"DMA_Spend.csv",rows:gen.spendRows,cols:["yearmonth","DMA","Channel","GRP","Cost_Per_GRP","Spend"]}}:null;
+  // ── STEP 1 STATE — Base Data (mirrors Basic Model config) ─────────────────
+  const [baseCfg,setBaseCfg] = useState({
+    brand:"Brand", nDMA:10, startDate:"2022-10", endDate:"2024-12",
+    nHCPPerDMA:50, segCol:"A",
+    fieldChannels:["Total_calls","speaker_program","samples","copay_cards","virtual_calls","Phone_calls"],
+    digitalChannels:["paid_search_impressions","bannerads_impressions","socialmedia_impressions","email_delivered"],
+    specialties:["ONC","PCPs","URO","NP/PAs"],
+  });
+  const [newFieldCh,setNewFieldCh]     = useState("");
+  const [newDigitalCh,setNewDigitalCh] = useState("");
+  const [newSpec,setNewSpec]           = useState("");
+  // Base step accordions
+  const [openBase,setOpenBase] = useState({identity:true,structure:false,fieldch:false,digitalch:false,specs:false});
+  const toggleBase = k => setOpenBase(o=>({...o,[k]:!o[k]}));
 
-  const handleGen=useCallback(()=>{setGen(buildDMAPair(cfg));setTab("Sales");},[cfg]);
+  // ── STEP 2 STATE — DMA Data config ────────────────────────────────────────
+  const [dmaCfg,setDmaCfg] = useState({
+    dmaChannels:["TV","Radio","OOH","Print","Digital","Cinema"],   // DMA-level channels (like NC_1, NC_2 in samples)
+    extraMonthsBefore:2,
+  });
+  const [newDmaCh,setNewDmaCh] = useState("");
+  // DMA step accordions
+  const [openDMA,setOpenDMA] = useState({channels:true,months:false});
+  const toggleDMA = k => setOpenDMA(o=>({...o,[k]:!o[k]}));
 
-  const addCh=()=>{if(newCh.trim()&&!cfg.dmaChannels.includes(newCh.trim())){setCfg(c=>({...c,dmaChannels:[...c.dmaChannels,newCh.trim()]}));setNewCh("");}};
-  const removeCh=ch=>setCfg(c=>({...c,dmaChannels:c.dmaChannels.filter(x=>x!==ch)}));
+  // ── Helpers ───────────────────────────────────────────────────────────────
+  const addItem=(setter,key,val,setVal)=>{
+    const v=val.trim();
+    if(!v) return;
+    setter(c=>({...c,[key]:c[key].includes(v)?c[key]:[...c[key],v]}));
+    setVal("");
+  };
+  const removeItem=(setter,key,v)=>setter(c=>({...c,[key]:c[key].filter(x=>x!==v)}));
 
+  const chip=(color,label,onX)=>(
+    <span key={label} style={{display:"inline-flex",alignItems:"center",gap:"5px",fontSize:"10px",
+      padding:"3px 9px",borderRadius:"20px",background:`${color}18`,border:`1px solid ${color}44`,color,fontWeight:"600"}}>
+      {label}<span onClick={onX} style={{cursor:"pointer",opacity:0.7,fontWeight:"900"}}>×</span>
+    </span>
+  );
+
+  const addRow=(icon,label,input,onAdd)=>(
+    <div style={{display:"flex",gap:"6px",marginBottom:"10px"}}>
+      <input style={{...S.input,flex:1}} placeholder={`Add ${label}…`}
+        value={input.val} onChange={e=>input.set(e.target.value)}
+        onKeyDown={e=>e.key==="Enter"&&onAdd()}/>
+      <button onClick={onAdd}
+        style={{...S.primaryBtn(accentAmber),width:"auto",padding:"8px 12px",marginTop:0,whiteSpace:"nowrap"}}>
+        {icon} Add
+      </button>
+    </div>
+  );
+
+  // ── STEP 1: Generate Base Data ────────────────────────────────────────────
+  const handleGenBase = useCallback(()=>{
+    setLoading(true);
+    setTimeout(()=>{
+      try {
+        const result = buildDMAPair({...baseCfg, dmaChannels:[]}); // no DMA channels in base step
+        setBaseGen(result.baseRows);
+        setTab("Base");
+        // Auto-advance to step 2
+        setStep(2);
+      } catch(e){ console.error(e); }
+      setLoading(false);
+    },50);
+  },[baseCfg]);
+
+  // ── STEP 2: Generate DMA Data from Base ───────────────────────────────────
+  const handleGenDMA = useCallback(()=>{
+    if(!baseGen) return;
+    const brand = baseCfg.brand||"Brand";
+
+    // ── Step A: Aggregate Brand_Trx per DMA×Month from base rows ─────────────
+    // Key = DMA + "_" + Month_ID guarantees one row per unique combination
+    const agg={};
+    baseGen.forEach(r=>{
+      const key=`${r.DMA}_${r.Month_ID}`;
+      if(!agg[key]) agg[key]={DMA:r.DMA, Month_ID:r.Month_ID, Brand_Trx:0};
+      agg[key].Brand_Trx+=r.Brand_Trx;
+    });
+
+    // ── Step B: Build extra lag months before base start ──────────────────────
+    // Use shiftMonthBack to get clean YYYYMM integers — no duplicate risk
+    const dmas = [...new Set(baseGen.map(r=>r.DMA))].sort();
+    const baseMonthInts = new Set(Object.values(agg).map(r=>r.Month_ID));
+
+    const extraAgg={};  // keyed same way to prevent any overlap with base months
+    if(dmaCfg.extraMonthsBefore > 0){
+      for(let i=dmaCfg.extraMonthsBefore; i>=1; i--){
+        const lagYYMM = shiftMonthBack(baseCfg.startDate, i); // returns "YYYY-MM"
+        const lagInt  = parseInt(lagYYMM.replace("-",""));    // YYYYMM integer
+        // Skip if this month somehow already exists in base data
+        if(baseMonthInts.has(lagInt)) continue;
+        dmas.forEach(dma=>{
+          const key=`${dma}_${lagInt}`;
+          if(!extraAgg[key]){
+            extraAgg[key]={DMA:dma, Month_ID:lagInt, Brand_Trx:Math.round(rnd(500,5000))};
+          }
+        });
+      }
+    }
+
+    // ── Step C: Merge, deduplicate on DMA×Month_ID, add channel cols ─────────
+    // Combine extra lag rows first, then base-aggregated rows
+    // Final dedup map ensures the composite key is always unique
+    const finalMap={};
+    [...Object.values(extraAgg), ...Object.values(agg)].forEach(row=>{
+      const key=`${row.DMA}_${row.Month_ID}`;
+      finalMap[key]=row; // base rows win over extra rows if overlap
+    });
+
+    const dmaRows = Object.values(finalMap)
+      .map(row=>{
+        const out={DMA:row.DMA, Month_ID:row.Month_ID, Brand_Trx:row.Brand_Trx};
+        // DMA-level channels — one float per channel per DMA×Month
+        dmaCfg.dmaChannels.forEach(ch=>{ out[ch]=parseFloat(rnd(0.1,2.2).toFixed(5)); });
+        out.Brand=brand;
+        return out;
+      })
+      .sort((a,b)=>String(a.DMA).localeCompare(String(b.DMA))||a.Month_ID-b.Month_ID);
+
+    setDmaGen(dmaRows);
+    setTab("DMA");
+  },[baseGen,baseCfg,dmaCfg]);
+
+  // ── File map for preview ──────────────────────────────────────────────────
+  const brandName = baseCfg.brand||"Brand";
+  const files = (baseGen||dmaGen) ? {
+    ...(baseGen ? {Base:{label:`Base_Data_${brandName}.csv`, rows:baseGen}} : {}),
+    ...(dmaGen  ? {DMA: {label:`DMA_Data_${brandName}.csv`,  rows:dmaGen}}  : {}),
+  } : null;
+  const tabKeys = [
+    ...(baseGen ? ["Base"] : []),
+    ...(dmaGen  ? ["DMA"]  : []),
+  ];
+
+  // ── Step indicator helper ─────────────────────────────────────────────────
+  const StepIndicator = ()=>(
+    <div style={{display:"flex",alignItems:"center",gap:"0",marginBottom:"20px"}}>
+      {[
+        {n:1,label:"Base Data",done:!!baseGen},
+        {n:2,label:"DMA Data",done:!!dmaGen},
+      ].map(({n,label,done},i)=>(
+        <React.Fragment key={n}>
+          {i>0&&<div style={{flex:1,height:"2px",background:baseGen?accent:border,margin:"0 8px"}}/>}
+          <div onClick={()=>{ if(n===1||(n===2&&baseGen)) setStep(n); }}
+            style={{display:"flex",alignItems:"center",gap:"8px",cursor:n===1||(n===2&&baseGen)?"pointer":"default"}}>
+            <div style={{width:"28px",height:"28px",borderRadius:"50%",display:"flex",alignItems:"center",
+              justifyContent:"center",fontSize:"12px",fontWeight:"700",flexShrink:0,
+              background: done?accent:(step===n?`${accent}33`:`${border}`),
+              border:`2px solid ${done||step===n?accent:border}`,
+              color: done?bg:(step===n?accent:textSecondary)}}>
+              {done?"✓":n}
+            </div>
+            <span style={{fontSize:"12px",fontWeight:"700",
+              color:done?accent:(step===n?textPrimary:textSecondary)}}>{label}</span>
+          </div>
+        </React.Fragment>
+      ))}
+    </div>
+  );
+
+  // ── Accordion renderer ────────────────────────────────────────────────────
+  const Accordion = ({sections, open, toggle, color})=>(
+    <div style={{border:`1px solid ${border}`,borderRadius:"8px",overflow:"hidden"}}>
+      {sections.map(({key,label,icon,summary,content},i)=>(
+        <div key={key} style={{borderBottom: i<sections.length-1?`1px solid ${border}`:"none"}}>
+          <button onClick={()=>toggle(key)} style={{
+            width:"100%",display:"flex",alignItems:"center",justifyContent:"space-between",
+            padding:"13px 16px",background:"transparent",border:"none",cursor:"pointer",
+            fontFamily:"inherit",textAlign:"left",gap:"10px",
+          }}>
+            <div style={{display:"flex",alignItems:"center",gap:"10px",minWidth:0}}>
+              <span style={{fontSize:"15px",flexShrink:0}}>{icon}</span>
+              <div style={{minWidth:0}}>
+                <div style={{fontSize:"12px",fontWeight:"700",color:open[key]?color:textPrimary,letterSpacing:"0.04em"}}>{label}</div>
+                {!open[key]&&<div style={{fontSize:"10px",color:textSecondary,marginTop:"2px",
+                  whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",maxWidth:"270px"}}>{summary}</div>}
+              </div>
+            </div>
+            <span style={{color:open[key]?color:textSecondary,fontSize:"14px",flexShrink:0,
+              transition:"transform 0.2s",transform:open[key]?"rotate(180deg)":"rotate(0deg)"}}>▾</span>
+          </button>
+          {open[key]&&<div style={{padding:"4px 16px 16px"}}>{content}</div>}
+        </div>
+      ))}
+    </div>
+  );
+
+  // ── STEP 1 SECTIONS ───────────────────────────────────────────────────────
+  const baseMonthCount = generateMonths(baseCfg.startDate,baseCfg.endDate).length;
+  const step1Sections = [
+    {
+      key:"identity", label:"Brand & Dates", icon:"🏷️",
+      summary:`${baseCfg.brand} · ${baseCfg.startDate} → ${baseCfg.endDate} · Seg: ${baseCfg.segCol}`,
+      content:(
+        <>
+          <Field label="Brand Name"><Input value={baseCfg.brand} onChange={v=>setBaseCfg(c=>({...c,brand:v}))}/></Field>
+          <Field label="Segment Code (Seg_col)"><Input value={baseCfg.segCol} onChange={v=>setBaseCfg(c=>({...c,segCol:v}))}/></Field>
+          <div style={S.grid2}>
+            <Field label="Start (YYYY-MM)"><Input value={baseCfg.startDate} onChange={v=>setBaseCfg(c=>({...c,startDate:v}))}/></Field>
+            <Field label="End (YYYY-MM)"><Input value={baseCfg.endDate} onChange={v=>setBaseCfg(c=>({...c,endDate:v}))}/></Field>
+          </div>
+        </>
+      )
+    },
+    {
+      key:"structure", label:"DMA & HCP Structure", icon:"🗺️",
+      summary:`${baseCfg.nDMA} DMAs · ${baseCfg.nHCPPerDMA} HCPs/DMA · ${baseMonthCount} months · ~${(baseCfg.nDMA*baseCfg.nHCPPerDMA*baseMonthCount).toLocaleString()} rows`,
+      content:(
+        <div style={S.grid2}>
+          <Field label="# DMA Geographies"><NumInput value={baseCfg.nDMA} onChange={v=>setBaseCfg(c=>({...c,nDMA:Math.max(1,v)}))}/></Field>
+          <Field label="# HCPs per DMA"><NumInput value={baseCfg.nHCPPerDMA} onChange={v=>setBaseCfg(c=>({...c,nHCPPerDMA:Math.max(1,v)}))}/></Field>
+        </div>
+      )
+    },
+    {
+      key:"fieldch", label:"Field Channels (HCP-level)", icon:"📋",
+      summary:`${baseCfg.fieldChannels.length} channels · ${baseCfg.fieldChannels.slice(0,3).join(", ")}${baseCfg.fieldChannels.length>3?" …":""}`,
+      content:(
+        <>
+          <div style={{fontSize:"10px",color:textSecondary,marginBottom:"8px",lineHeight:"1.5"}}>Float values per HCP per month — represent individual rep activity</div>
+          <div style={{display:"flex",flexWrap:"wrap",gap:"5px",marginBottom:"8px"}}>
+            {baseCfg.fieldChannels.map(ch=>chip(accentAmber,ch,()=>removeItem(setBaseCfg,"fieldChannels",ch)))}
+          </div>
+          {addRow("📋","field channel",{val:newFieldCh,set:setNewFieldCh},()=>addItem(setBaseCfg,"fieldChannels",newFieldCh,setNewFieldCh))}
+        </>
+      )
+    },
+    {
+      key:"digitalch", label:"Digital Channels (DMA-level)", icon:"📡",
+      summary:`${baseCfg.digitalChannels.length} channels · ${baseCfg.digitalChannels.slice(0,2).join(", ")}${baseCfg.digitalChannels.length>2?" …":""}`,
+      content:(
+        <>
+          <div style={{fontSize:"10px",color:textSecondary,marginBottom:"8px",lineHeight:"1.5"}}>Integer impressions per DMA per month — same for all HCPs in that DMA</div>
+          <div style={{display:"flex",flexWrap:"wrap",gap:"5px",marginBottom:"8px"}}>
+            {baseCfg.digitalChannels.map(ch=>chip(accentBlue,ch,()=>removeItem(setBaseCfg,"digitalChannels",ch)))}
+          </div>
+          {addRow("📡","digital channel",{val:newDigitalCh,set:setNewDigitalCh},()=>addItem(setBaseCfg,"digitalChannels",newDigitalCh,setNewDigitalCh))}
+        </>
+      )
+    },
+    {
+      key:"specs", label:"HCP Specialties", icon:"🩺",
+      summary:`${baseCfg.specialties.join(", ")}`,
+      content:(
+        <>
+          <div style={{display:"flex",flexWrap:"wrap",gap:"5px",marginBottom:"8px"}}>
+            {baseCfg.specialties.map(s=>chip(accent,s,()=>removeItem(setBaseCfg,"specialties",s)))}
+          </div>
+          {addRow("🩺","specialty",{val:newSpec,set:setNewSpec},()=>addItem(setBaseCfg,"specialties",newSpec,setNewSpec))}
+        </>
+      )
+    },
+  ];
+
+  // ── STEP 2 SECTIONS ───────────────────────────────────────────────────────
+  const step2Sections = [
+    {
+      key:"channels", label:"DMA-Level Channels", icon:"📡",
+      summary:`${dmaCfg.dmaChannels.length} channel${dmaCfg.dmaChannels.length!==1?"s":""} · ${dmaCfg.dmaChannels.slice(0,4).join(", ")}${dmaCfg.dmaChannels.length>4?" …":""}`,
+      content:(
+        <>
+          <div style={{fontSize:"10px",color:textSecondary,marginBottom:"10px",lineHeight:"1.6"}}>
+            DMA-level media channels — one continuous float value per channel per DMA per month.<br/>
+            These appear as columns in the DMA file (e.g. TV, Radio, OOH, Newspaper).
+          </div>
+          <div style={{display:"flex",flexWrap:"wrap",gap:"5px",marginBottom:"10px"}}>
+            {dmaCfg.dmaChannels.map(ch=>(
+              <span key={ch} style={{display:"inline-flex",alignItems:"center",gap:"5px",fontSize:"10px",
+                padding:"3px 9px",borderRadius:"20px",background:`${accentAmber}18`,
+                border:`1px solid ${accentAmber}44`,color:accentAmber,fontWeight:"600"}}>
+                {ch}
+                <span onClick={()=>setDmaCfg(c=>({...c,dmaChannels:c.dmaChannels.filter(x=>x!==ch)}))}
+                  style={{cursor:"pointer",opacity:0.7,fontWeight:"900",lineHeight:1}}>×</span>
+              </span>
+            ))}
+          </div>
+          <div style={{display:"flex",gap:"6px"}}>
+            <input style={{...S.input,flex:1}} placeholder="Add DMA channel (e.g. TV, Radio, OOH)…"
+              value={newDmaCh} onChange={e=>setNewDmaCh(e.target.value)}
+              onKeyDown={e=>{
+                if(e.key==="Enter"&&newDmaCh.trim()){
+                  const v=newDmaCh.trim().replace(/\s+/g,"_");
+                  if(!dmaCfg.dmaChannels.includes(v)) setDmaCfg(c=>({...c,dmaChannels:[...c.dmaChannels,v]}));
+                  setNewDmaCh("");
+                }
+              }}/>
+            <button onClick={()=>{
+                const v=newDmaCh.trim().replace(/\s+/g,"_");
+                if(v&&!dmaCfg.dmaChannels.includes(v)) setDmaCfg(c=>({...c,dmaChannels:[...c.dmaChannels,v]}));
+                setNewDmaCh("");
+              }}
+              style={{...S.primaryBtn(accentAmber),width:"auto",padding:"8px 14px",marginTop:0,whiteSpace:"nowrap"}}>
+              + Add
+            </button>
+          </div>
+          <div style={{marginTop:"10px",fontSize:"10px",color:textSecondary,lineHeight:"1.5",
+            background:`${accentAmber}0D`,border:`1px solid ${accentAmber}22`,borderRadius:"5px",padding:"7px 10px"}}>
+            💡 Values are continuous floats in range ~0.1–2.2 per DMA×Month, representing indexed channel activity (e.g. GRP indices, reach scores)
+          </div>
+        </>
+      )
+    },
+    {
+      key:"months", label:"Extra Lag Months", icon:"📅",
+      summary:`${dmaCfg.extraMonthsBefore} extra month${dmaCfg.extraMonthsBefore!==1?"s":""} before ${baseCfg.startDate} in DMA file`,
+      content:(
+        <>
+          <Field label="Extra months before Base start date">
+            <NumInput value={dmaCfg.extraMonthsBefore} onChange={v=>setDmaCfg(c=>({...c,extraMonthsBefore:Math.max(0,Math.min(24,v))}))}/>
+            <span style={{fontSize:"10px",color:textSecondary,marginTop:"4px",display:"block"}}>
+              DMA file extends back {dmaCfg.extraMonthsBefore} month{dmaCfg.extraMonthsBefore!==1?"s":""} before <strong style={{color:accentAmber}}>{baseCfg.startDate}</strong> with estimated TRx — used as sales lag warmup
+            </span>
+          </Field>
+        </>
+      )
+    },
+  ];
+
+  // ── RENDER ────────────────────────────────────────────────────────────────
   return(
     <div style={S.app}>
       <div style={{...S.header,paddingBottom:"18px"}}>
         <h1 style={S.title}><BackBtn onBack={onBack}/><span style={S.badge(accentAmber)}>DMA</span>DMA Model Dataset Pair</h1>
-        <p style={S.subtitle}>Generate DMA-level Sales & Spend files with GRP data for geo-level MMx modeling</p>
+        <p style={S.subtitle}>Two-step generation · <strong style={{color:accentAmber}}>Base_Data_{baseCfg.brand}.csv</strong> then <strong style={{color:accentAmber}}>DMA_Data_{baseCfg.brand}.csv</strong></p>
       </div>
       <div style={S.mainGrid}>
-        <div style={S.panel}>
-          <SectionLabel color={accentAmber}>DMA Structure</SectionLabel>
-          <Field label="# DMA Geographies"><NumInput value={cfg.nDMA} onChange={v=>setCfg(c=>({...c,nDMA:Number(v)}))}/></Field>
-          <div style={S.grid2}>
-            <Field label="Start (YYYY-MM)"><Input value={cfg.startDate} onChange={v=>setCfg(c=>({...c,startDate:v}))}/></Field>
-            <Field label="End (YYYY-MM)"><Input value={cfg.endDate} onChange={v=>setCfg(c=>({...c,endDate:v}))}/></Field>
-          </div>
-          <Field label="Unit Price ($)"><NumInput value={cfg.unitPrice} onChange={v=>setCfg(c=>({...c,unitPrice:Number(v)}))}/></Field>
-          <Divider/>
-          <SectionLabel color={accentAmber}>Sales Range (units/month)</SectionLabel>
-          <div style={S.grid2}>
-            <Field label="Min Sales"><NumInput value={cfg.minSales} onChange={v=>setCfg(c=>({...c,minSales:Number(v)}))}/></Field>
-            <Field label="Max Sales"><NumInput value={cfg.maxSales} onChange={v=>setCfg(c=>({...c,maxSales:Number(v)}))}/></Field>
-          </div>
-          <Divider/>
-          <SectionLabel color={accentAmber}>Spend Range (GRPs/month)</SectionLabel>
-          <div style={S.grid2}>
-            <Field label="Min GRP"><NumInput value={cfg.minSpend} onChange={v=>setCfg(c=>({...c,minSpend:Number(v)}))}/></Field>
-            <Field label="Max GRP"><NumInput value={cfg.maxSpend} onChange={v=>setCfg(c=>({...c,maxSpend:Number(v)}))}/></Field>
-          </div>
-          <Divider/>
-          <SectionLabel color={accentAmber}>Media Channels</SectionLabel>
-          <div style={{display:"flex",flexWrap:"wrap",gap:"7px",marginBottom:"12px"}}>
-            {cfg.dmaChannels.map(ch=>(
-              <span key={ch} style={{...S.checkBtn(true,accentAmber),display:"inline-flex",alignItems:"center",gap:"6px"}}>
-                {ch}<span onClick={()=>removeCh(ch)} style={{cursor:"pointer",opacity:0.7,fontWeight:"900"}}>×</span>
-              </span>
-            ))}
-          </div>
-          <div style={{display:"flex",gap:"8px"}}>
-            <input style={{...S.input,flex:1}} placeholder="Add channel..." value={newCh} onChange={e=>setNewCh(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addCh()}/>
-            <button onClick={addCh} style={{...S.primaryBtn(accentAmber),width:"auto",padding:"8px 16px",marginTop:0,whiteSpace:"nowrap"}}>+ Add</button>
-          </div>
-          <button style={S.primaryBtn(accentAmber)} onClick={handleGen}>▶ GENERATE FILES</button>
+
+        {/* ── LEFT PANEL ── */}
+        <div style={{...S.panel,maxHeight:"88vh",overflowY:"auto",padding:"20px"}}>
+          <StepIndicator/>
+
+          {/* STEP 1 */}
+          {step===1&&(
+            <>
+              <div style={{fontSize:"10px",fontWeight:"700",color:accentAmber,letterSpacing:"0.12em",marginBottom:"12px"}}>
+                STEP 1 — CONFIGURE BASE DATA
+              </div>
+              <Accordion sections={step1Sections} open={openBase} toggle={toggleBase} color={accentAmber}/>
+              <div style={{marginTop:"14px",background:`${accentAmber}0D`,border:`1px solid ${accentAmber}22`,borderRadius:"6px",padding:"8px 12px",fontSize:"10px",color:textSecondary,lineHeight:"1.7",marginBottom:"12px"}}>
+                <strong style={{color:accentAmber}}>Base_Data_{baseCfg.brand}.csv</strong><br/>
+                Customer_ID · Month_ID · DMA · Brand_Trx · {baseCfg.fieldChannels.concat(baseCfg.digitalChannels).slice(0,4).join(" · ")}{baseCfg.fieldChannels.concat(baseCfg.digitalChannels).length>4?" … ":""} · specialtygrouping · brand · Seg_col<br/>
+                ≈ <strong style={{color:accentAmber}}>{(baseCfg.nDMA*baseCfg.nHCPPerDMA*baseMonthCount).toLocaleString()}</strong> rows
+              </div>
+              <button style={{...S.primaryBtn(accentAmber),marginTop:0}} onClick={handleGenBase} disabled={loading}>
+                {loading?"⏳ Generating…":"▶ Generate Base Data →"}
+              </button>
+            </>
+          )}
+
+          {/* STEP 2 */}
+          {step===2&&(
+            <>
+              <div style={{fontSize:"10px",fontWeight:"700",color:accentAmber,letterSpacing:"0.12em",marginBottom:"12px"}}>
+                STEP 2 — CONFIGURE DMA DATA
+              </div>
+              {/* Locked summary of Step 1 */}
+              <div style={{background:surfaceLight,border:`1px solid ${accent}33`,borderRadius:"7px",padding:"10px 14px",marginBottom:"14px",fontSize:"10px",color:textSecondary,lineHeight:"1.8"}}>
+                <div style={{fontSize:"11px",fontWeight:"700",color:accent,marginBottom:"4px"}}>✓ Base Data ready</div>
+                {baseCfg.brand} · {baseCfg.nDMA} DMAs · {baseCfg.nHCPPerDMA} HCPs/DMA · {baseMonthCount} months<br/>
+                {baseGen?.length.toLocaleString()} rows generated
+                <button onClick={()=>setStep(1)} style={{display:"block",marginTop:"6px",background:"none",border:`1px solid ${border}`,borderRadius:"5px",padding:"3px 10px",fontSize:"10px",color:textSecondary,cursor:"pointer",fontFamily:"inherit"}}>
+                  ← Edit Base Config
+                </button>
+              </div>
+
+              <Accordion sections={step2Sections} open={openDMA} toggle={toggleDMA} color={accentAmber}/>
+
+              <div style={{marginTop:"14px",background:`${accentAmber}0D`,border:`1px solid ${accentAmber}22`,borderRadius:"6px",padding:"8px 12px",fontSize:"10px",color:textSecondary,lineHeight:"1.7",marginBottom:"12px"}}>
+                <strong style={{color:accentAmber}}>DMA_Data_{baseCfg.brand}.csv</strong><br/>
+                DMA · Month_ID · Brand_Trx · {dmaCfg.dmaChannels.slice(0,4).join(" · ")}{dmaCfg.dmaChannels.length>4?" … ":""} · Brand<br/>
+                ≈ <strong style={{color:accentAmber}}>{(baseCfg.nDMA*(baseMonthCount+dmaCfg.extraMonthsBefore)).toLocaleString()}</strong> rows
+                {dmaCfg.extraMonthsBefore>0&&<span> (incl. {dmaCfg.extraMonthsBefore} lag month{dmaCfg.extraMonthsBefore!==1?"s":""})</span>}
+              </div>
+              <button style={{...S.primaryBtn(accentAmber),marginTop:0}} onClick={handleGenDMA} disabled={!baseGen}>
+                ▶ Generate DMA Data
+              </button>
+            </>
+          )}
         </div>
-        <PreviewPanel files={files} activeTab={tab} setActiveTab={setTab} tabKeys={["Sales","Spend"]}/>
+
+        {/* ── RIGHT PANEL ── */}
+        <PreviewPanel
+          files={files} activeTab={tab} setActiveTab={setTab} tabKeys={tabKeys}
+          onGenerate={step===1?handleGenBase:handleGenDMA}
+          generating={loading}
+          genDisabled={step===2&&!baseGen}
+          genColor={accentAmber}
+        />
       </div>
     </div>
   );
